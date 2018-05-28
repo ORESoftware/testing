@@ -1,0 +1,30 @@
+{
+  "name": "testing",
+  "version": "0.0.1001",
+  "description": "Testing project for ORESoftware",
+  "main": "index.js",
+  "dependencies": {
+    "live-mutex": "0.0.10035"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "suman test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ORESoftware/testing.git"
+  },
+  "keywords": [
+    "testing",
+    "suman",
+    "oresoftware",
+    "nodejs",
+    "npm"
+  ],
+  "author": "Olegzandr VD",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/ORESoftware/testing/issues"
+  },
+  "homepage": "https://github.com/ORESoftware/testing#readme"
+}

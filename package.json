@@ -4,7 +4,9 @@
   "description": "Testing project for ORESoftware",
   "main": "index.js",
   "dependencies": {
-    "live-mutex": "0.0.10035"
+    "bluebird": "^3.5.1",
+    "chalk": "^2.4.1",
+    "live-mutex": "0.0.10041"
   },
   "devDependencies": {},
   "scripts": {

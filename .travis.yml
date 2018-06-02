@@ -19,7 +19,7 @@ addons:
 
 before_install: './scripts/travis/before_install.sh'
 install: './scripts/travis/install.sh'
-script: 'node live-mutex-speed.j'
+script: 'node live-mutex-speed.js'
 after_script: './scripts/travis/after_script.sh'
 notifications:
   email: false

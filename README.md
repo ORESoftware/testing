@@ -5,7 +5,7 @@
 In this case, MacOS is performing 10x or 100x faster, specifically
 for the live-mutex library code.
 
-(The disparity was found on Node.js version 10.1, but probably exists on other Node versions).
+(The disparity was originally found on Node.js version 10.1, but the same disparity also exists on Node version 9).
 
 ### to run tests:
 

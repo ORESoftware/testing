@@ -11,7 +11,7 @@
   },
   "devDependencies": {},
   "scripts": {
-    "test": "suman test"
+    "test": "echo 'not what you are looking for'"
   },
   "repository": {
     "type": "git",

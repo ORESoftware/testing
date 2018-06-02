@@ -18,26 +18,26 @@ process.on('unhandledRejection', function (e) {
 
 lmUtils.launchBrokerInChildProcess(conf, function () {
 
-  const client = new Client(conf);
+  const c = new Client(conf);
 
-  client.emitter.on('warning', function(){
+  c.emitter.on('warning', function(){
     console.error(...arguments);
   });
 
   console.log('this should only be logged once.');
 
-  client.ensure().then(function () {
+  c.ensure().then(function () {
 
     const a = Array.apply(null, {length: 1000});
     const start = Date.now();
 
-    var counts = {
+    let counts = {
       z: 0
     };
 
     async.eachLimit(a, 50, function (val, cb) {
 
-      client.lock('foo', function (err, unlock) {
+      c.lock('foo', function (err, unlock) {
 
         if (err) {
           return cb(err);

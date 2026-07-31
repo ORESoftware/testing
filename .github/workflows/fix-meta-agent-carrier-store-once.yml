@@ -36,77 +36,42 @@ jobs:
           from pathlib import Path
 
           path = Path("src/store.rs")
-          text = path.read_text(encoding="utf-8")
-          replacements = [
-              (
-                  """            if applied {
-                          if let Some(agent) = inner.agents.get_mut(&agent_id) {
-                              remove_completion_counter(agent, previous_outcome);
-                              agent.status = AgentStatus::Running;
-                              agent.active_task_id = Some(started.task_id.clone());
-                          }
-                      }
-          """,
-                  """            if applied
-                          && let Some(agent) = inner.agents.get_mut(&agent_id)
-                      {
-                          remove_completion_counter(agent, previous_outcome);
-                          agent.status = AgentStatus::Running;
-                          agent.active_task_id = Some(started.task_id.clone());
-                      }
-          """,
-              ),
-              (
-                  """            if applied {
-                          if let Some(agent) = inner.agents.get_mut(&agent_id) {
-                              remove_completion_counter(agent, previous_outcome);
-                              agent.status = if progress.blocker.is_some() {
-                                  AgentStatus::Blocked
-                              } else {
-                                  AgentStatus::Running
-                              };
-                              agent.active_task_id = Some(progress.task_id.clone());
-                          }
-                      }
-          """,
-                  """            if applied
-                          && let Some(agent) = inner.agents.get_mut(&agent_id)
-                      {
-                          remove_completion_counter(agent, previous_outcome);
-                          agent.status = if progress.blocker.is_some() {
-                              AgentStatus::Blocked
-                          } else {
-                              AgentStatus::Running
-                          };
-                          agent.active_task_id = Some(progress.task_id.clone());
-                      }
-          """,
-              ),
-              (
-                  """            if applied {
-                          if let Some(agent) = inner.agents.get_mut(&agent_id) {
-                              agent.active_task_id = None;
-                              reconcile_completion_counters(agent, previous_outcome, completed.outcome);
-                          }
-                      }
-          """,
-                  """            if applied
-                          && let Some(agent) = inner.agents.get_mut(&agent_id)
-                      {
-                          agent.active_task_id = None;
-                          reconcile_completion_counters(agent, previous_outcome, completed.outcome);
-                      }
-          """,
-              ),
-          ]
+          lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+          outer = "            if applied {\n"
+          inner = "                if let Some(agent) = inner.agents.get_mut(&agent_id) {\n"
+          inner_close = "                }\n"
+          outer_close = "            }\n"
+          output: list[str] = []
+          replacements = 0
+          index = 0
 
-          for old, new in replacements:
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"expected one exact replacement, found {count}")
-              text = text.replace(old, new, 1)
+          while index < len(lines):
+              if index + 1 < len(lines) and lines[index] == outer and lines[index + 1] == inner:
+                  output.extend(
+                      [
+                          "            if applied\n",
+                          "                && let Some(agent) = inner.agents.get_mut(&agent_id)\n",
+                          "            {\n",
+                      ]
+                  )
+                  index += 2
+                  while index + 1 < len(lines) and not (
+                      lines[index] == inner_close and lines[index + 1] == outer_close
+                  ):
+                      output.append(lines[index])
+                      index += 1
+                  if index + 1 >= len(lines):
+                      raise SystemExit("unterminated nested applied/agent guard")
+                  output.append(outer_close)
+                  index += 2
+                  replacements += 1
+                  continue
+              output.append(lines[index])
+              index += 1
 
-          path.write_text(text, encoding="utf-8")
+          if replacements != 3:
+              raise SystemExit(f"expected three exact guard rewrites, found {replacements}")
+          path.write_text("".join(output), encoding="utf-8")
           PY
 
       - name: Install pinned Rust toolchain

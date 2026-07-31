@@ -22,38 +22,38 @@ const EXPORT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Static identity metadata for one MCP server process.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TelemetrySpec {
-    service_name: &'static str,
-    service_namespace: &'static str,
-    service_version: &'static str,
+    name: &'static str,
+    namespace: &'static str,
+    version: &'static str,
 }
 
 impl TelemetrySpec {
     /// Creates a telemetry identity.
     pub const fn new(
-        service_name: &'static str,
-        service_namespace: &'static str,
-        service_version: &'static str,
+        name: &'static str,
+        namespace: &'static str,
+        version: &'static str,
     ) -> Self {
         Self {
-            service_name,
-            service_namespace,
-            service_version,
+            name,
+            namespace,
+            version,
         }
     }
 
     /// Returns the service name.
     pub const fn service_name(self) -> &'static str {
-        self.service_name
+        self.name
     }
 
     /// Returns the service namespace.
     pub const fn service_namespace(self) -> &'static str {
-        self.service_namespace
+        self.namespace
     }
 
     /// Returns the service version.
     pub const fn service_version(self) -> &'static str {
-        self.service_version
+        self.version
     }
 }
 
@@ -123,9 +123,9 @@ pub fn init(spec: TelemetrySpec, filter: EnvFilter) -> TelemetryGuard {
 
     install_subscriber(filter, tracer);
     tracing::info!(
-        service.name = spec.service_name,
-        service.namespace = spec.service_namespace,
-        service.version = spec.service_version,
+        service.name = spec.name,
+        service.namespace = spec.namespace,
+        service.version = spec.version,
         otel.trace_exporter = tracer_provider.is_some(),
         otel.metric_exporter = meter_provider.is_some(),
         log.stream = "stderr",
@@ -203,9 +203,9 @@ where
 
 fn resource(spec: TelemetrySpec) -> Resource {
     let mut attributes = vec![
-        KeyValue::new("service.name", spec.service_name),
-        KeyValue::new("service.namespace", spec.service_namespace),
-        KeyValue::new("service.version", spec.service_version),
+        KeyValue::new("service.name", spec.name),
+        KeyValue::new("service.namespace", spec.namespace),
+        KeyValue::new("service.version", spec.version),
     ];
     push_env_attribute(&mut attributes, "DEPLOYMENT_ENV", "deployment.environment");
     push_env_attribute(&mut attributes, "POD_NAMESPACE", "k8s.namespace.name");

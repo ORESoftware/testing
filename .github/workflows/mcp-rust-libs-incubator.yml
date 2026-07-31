@@ -1,8 +1,6 @@
 name: mcp-rust-libs incubator
 
 on:
-  push:
-    branches: [incubator/mcp-rust-libs]
   pull_request:
     paths:
       - .github/workflows/mcp-rust-libs-incubator.yml
@@ -21,137 +19,7 @@ defaults:
     working-directory: mcp-rust-libs
 
 jobs:
-  normalize:
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'incubator/mcp-rust-libs'
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          persist-credentials: true
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
-        with:
-          toolchain: "1.97.1"
-          components: rustfmt
-      - name: Apply deterministic lint fixes
-        working-directory: .
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          root = Path("mcp-rust-libs")
-
-          def rewrite(relative: str, replacements: list[tuple[str, str]]) -> None:
-              path = root / relative
-              text = path.read_text()
-              for old, new in replacements:
-                  text = text.replace(old, new)
-              path.write_text(text)
-
-          rewrite(
-              "crates/ore-mcp-safety/src/lib.rs",
-              [
-                  ("impl<'a> TruncatedText<'a> {", "impl TruncatedText<'_> {"),
-                  (
-                      "pub fn is_sensitive_key(key: &str) -> bool {\n    let normalized = normalize_key(key);\n    const NEEDLES",
-                      "pub fn is_sensitive_key(key: &str) -> bool {\n    const NEEDLES",
-                  ),
-                  (
-                      "        \"username\",\n    ];\n    NEEDLES.iter().any(|needle| normalized.contains(needle))",
-                      "        \"username\",\n    ];\n\n    let normalized = normalize_key(key);\n    NEEDLES.iter().any(|needle| normalized.contains(needle))",
-                  ),
-                  (
-                      "    /// Adds an HTTP-like status code without adding an upstream body or URL.\n    pub const fn with_status",
-                      "    /// Adds an HTTP-like status code without adding an upstream body or URL.\n    #[must_use]\n    pub const fn with_status",
-                  ),
-              ],
-          )
-          rewrite(
-              "crates/ore-mcp-config/src/lib.rs",
-              [
-                  (
-                      "    /// `../share/example-mcp-server/.cli-flags.toml`.\n    pub const fn with_installed_share_path",
-                      "    /// `../share/example-mcp-server/.cli-flags.toml`.\n    #[must_use]\n    pub const fn with_installed_share_path",
-                  )
-              ],
-          )
-          rewrite(
-              "crates/ore-mcp-http/src/lib.rs",
-              [
-                  (
-                      "    /// Sets the connection timeout.\n    pub const fn with_connect_timeout",
-                      "    /// Sets the connection timeout.\n    #[must_use]\n    pub const fn with_connect_timeout",
-                  ),
-                  (
-                      "    /// Sets the total request timeout.\n    pub const fn with_request_timeout",
-                      "    /// Sets the total request timeout.\n    #[must_use]\n    pub const fn with_request_timeout",
-                  ),
-                  (
-                      "    /// Sets the maximum successful response-body size.\n    pub const fn with_response_limit",
-                      "    /// Sets the maximum successful response-body size.\n    #[must_use]\n    pub const fn with_response_limit",
-                  ),
-              ],
-          )
-          rewrite(
-              "crates/ore-mcp-testkit/src/lib.rs",
-              [
-                  ("    /// Appends one command-line argument.\n    pub fn arg", "    /// Appends one command-line argument.\n    #[must_use]\n    pub fn arg"),
-                  ("    /// Appends several command-line arguments.\n    pub fn args", "    /// Appends several command-line arguments.\n    #[must_use]\n    pub fn args"),
-                  ("    /// Sets the child process working directory.\n    pub fn current_dir", "    /// Sets the child process working directory.\n    #[must_use]\n    pub fn current_dir"),
-                  ("    /// Adds or replaces one child environment variable.\n    pub fn env", "    /// Adds or replaces one child environment variable.\n    #[must_use]\n    pub fn env"),
-                  ("    /// with [`Self::env`].\n    pub const fn env_clear", "    /// with [`Self::env`].\n    #[must_use]\n    pub const fn env_clear"),
-                  ("    /// Replaces the default protocol and process limits.\n    pub const fn limits", "    /// Replaces the default protocol and process limits.\n    #[must_use]\n    pub const fn limits"),
-              ],
-          )
-          rewrite(
-              "crates/ore-mcp-telemetry/src/lib.rs",
-              [
-                  (
-                      "use opentelemetry::{KeyValue, global};",
-                      "use opentelemetry::{KeyValue, global, trace::TracerProvider as _};",
-                  ),
-                  (
-                      "    use opentelemetry::trace::TracerProvider as _;\n    let tracer = provider.tracer(\"mcp-server\");",
-                      "    let tracer = provider.tracer(\"mcp-server\");",
-                  ),
-              ],
-          )
-          PY
-      - name: Generate lockfile and canonical formatting
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo generate-lockfile
-          cargo fmt --all
-      - name: Commit normalized workspace once
-        working-directory: .
-        env:
-          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          git diff --check -- mcp-rust-libs
-          if git diff --quiet -- mcp-rust-libs && test -f mcp-rust-libs/Cargo.lock; then
-            echo 'workspace already normalized'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add mcp-rust-libs
-          git commit -m 'chore: normalize and lock mcp-rust-libs workspace'
-          git push origin "HEAD:${HEAD_BRANCH}"
-
   validate:
-    permissions:
-      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -173,16 +41,13 @@ jobs:
         with:
           toolchain: "1.97.1"
           components: rustfmt, clippy
-      - name: Generate the initial lockfile when absent
-        run: cargo generate-lockfile
+      - name: Verify committed lockfile
+        run: cargo metadata --locked --no-deps --format-version 1 > /dev/null
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           workspaces: mcp-rust-libs -> target
-      - name: Apply canonical Rust formatting
-        run: cargo fmt --all
-      - name: Reject whitespace errors after formatting
-        working-directory: .
-        run: git diff --check -- mcp-rust-libs
+      - name: Format
+        run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: Test all features
@@ -197,7 +62,7 @@ jobs:
         run: cargo build --locked --workspace --all-features --release
       - name: Verify Zed package smoke contract
         run: sh scripts/verify-zed-package.sh .
-      - name: Upload formatted workspace and generated lockfile
+      - name: Upload exact validated workspace
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -210,8 +75,6 @@ jobs:
           if-no-files-found: error
 
   msrv:
-    permissions:
-      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -221,14 +84,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: "1.95.0"
-      - name: Generate a lockfile compatible with the declared MSRV
-        run: cargo generate-lockfile
-      - name: Check the workspace on the declared MSRV
+      - name: Check the locked workspace on the declared MSRV
         run: cargo check --locked --workspace --all-features
 
   audit:
-    permissions:
-      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -238,8 +97,6 @@ jobs:
       - uses: taiki-e/install-action@c44f6b046f1c29ae5918b1e0bfdbb2f1813836fd # v2
         with:
           tool: cargo-audit@0.22.2,cargo-deny@0.19.0
-      - name: Generate dependency lockfile when absent
-        run: cargo generate-lockfile
       - name: Dependency vulnerability audit
         run: cargo audit --deny warnings
       - name: License, source, and duplicate policy

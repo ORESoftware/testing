@@ -18,7 +18,7 @@ rmcp-router = ["dep:rmcp"]
 opentelemetry.workspace = true
 opentelemetry-otlp.workspace = true
 opentelemetry_sdk.workspace = true
-ore-mcp-safety = { path = "../ore-mcp-safety" }
+ore-mcp-safety = { path = "../ore-mcp-safety", version = "=0.1.0" }
 rmcp = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true

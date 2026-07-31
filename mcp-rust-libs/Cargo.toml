@@ -20,7 +20,6 @@ authors = ["Alexander Mills <alexander.d.mills@gmail.com>"]
 publish = false
 
 [workspace.dependencies]
-flags2env = { git = "https://github.com/ORESoftware/flags-2-env.git", rev = "377bff1a4e7424eb98377997a232ddc0fc700f59" }
 opentelemetry = "0.32"
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "metrics", "trace"] }
 opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio"] }

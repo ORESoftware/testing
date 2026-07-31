@@ -384,12 +384,11 @@ impl StdioHarness {
     /// child is killed before the error is returned.
     pub async fn close_and_wait(mut self) -> Result<std::process::ExitStatus, HarnessError> {
         drop(self.stdin);
-        match timeout(self.limits.io_timeout(), self.child.wait()).await {
-            Ok(result) => result.map_err(HarnessError::ProcessIo),
-            Err(_) => {
-                let _ = self.child.kill().await;
-                Err(HarnessError::Timeout("child exit"))
-            }
+        if let Ok(result) = timeout(self.limits.io_timeout(), self.child.wait()).await {
+            result.map_err(HarnessError::ProcessIo)
+        } else {
+            let _ = self.child.kill().await;
+            Err(HarnessError::Timeout("child exit"))
         }
     }
 

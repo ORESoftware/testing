@@ -112,12 +112,16 @@ jobs:
               output = root / item["output"]
               if output.suffix not in formatted_suffixes:
                   continue
+              template = root / item["template"]
+              template_text = template.read_text(encoding="utf-8")
               text = output.read_text(encoding="utf-8")
               for actual, placeholder in replacements:
+                  if placeholder not in template_text:
+                      continue
                   if actual not in text:
                       raise SystemExit(f"missing generated header value {actual!r} in {output}")
                   text = text.replace(actual, placeholder, 1)
-              (root / item["template"]).write_text(text, encoding="utf-8")
+              template.write_text(text, encoding="utf-8")
           PY
 
           python3 scripts/regenerate-generated.py --check

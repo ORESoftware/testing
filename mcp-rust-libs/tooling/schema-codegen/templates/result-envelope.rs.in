@@ -2,6 +2,8 @@
 // schema: {{SCHEMA_ID}}
 // sha256: {{SCHEMA_SHA256}}
 
+#![allow(missing_docs)]
+
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 use std::fmt;
@@ -657,6 +659,7 @@ impl<T> ResultEnvelope<T> {
         })
     }
 
+    #[must_use]
     pub fn with_meta(mut self, meta: Metadata) -> Self {
         match &mut self {
             Self::Success(success) => success.meta = Some(meta),

@@ -5,6 +5,7 @@
 import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 
@@ -238,7 +239,7 @@ fn message_has_only_allowed_controls(value: String) -> Bool {
   })
 }
 
-fn is_request_id_code_point(code_point: string.UtfCodepoint) -> Bool {
+fn is_request_id_code_point(code_point: UtfCodepoint) -> Bool {
   let value = string.utf_codepoint_to_int(code_point)
   is_ascii_letter_or_digit(value)
   || value == 46
@@ -247,12 +248,12 @@ fn is_request_id_code_point(code_point: string.UtfCodepoint) -> Bool {
   || value == 45
 }
 
-fn is_ascii_lower(code_point: string.UtfCodepoint) -> Bool {
+fn is_ascii_lower(code_point: UtfCodepoint) -> Bool {
   let value = string.utf_codepoint_to_int(code_point)
   value >= 97 && value <= 122
 }
 
-fn is_error_code_tail(code_point: string.UtfCodepoint) -> Bool {
+fn is_error_code_tail(code_point: UtfCodepoint) -> Bool {
   let value = string.utf_codepoint_to_int(code_point)
   value >= 97
   && value <= 122

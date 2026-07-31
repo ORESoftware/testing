@@ -1,4 +1,5 @@
 import gleam/json
+import gleam/option.{None, Some}
 import gleam/string
 import gleeunit
 import gleeunit/should

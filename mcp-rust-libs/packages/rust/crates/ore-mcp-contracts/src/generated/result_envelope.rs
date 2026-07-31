@@ -2,6 +2,8 @@
 // schema: https://schemas.oresoftware.com/mcp/common/v1/result-envelope.schema.json
 // sha256: 2f28d646fa7ada0b3d2edd3c5ee19d663543e11117bbb37f4609307c6a9ff61e
 
+#![allow(missing_docs)]
+
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value};
 use std::fmt;
@@ -657,6 +659,7 @@ impl<T> ResultEnvelope<T> {
         })
     }
 
+    #[must_use]
     pub fn with_meta(mut self, meta: Metadata) -> Self {
         match &mut self {
             Self::Success(success) => success.meta = Some(meta),

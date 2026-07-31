@@ -166,12 +166,14 @@ impl StdioCommand {
     }
 
     /// Appends one command-line argument.
+    #[must_use]
     pub fn arg(mut self, argument: impl AsRef<OsStr>) -> Self {
         self.arguments.push(argument.as_ref().to_owned());
         self
     }
 
     /// Appends several command-line arguments.
+    #[must_use]
     pub fn args<I, S>(mut self, arguments: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -186,12 +188,14 @@ impl StdioCommand {
     }
 
     /// Sets the child process working directory.
+    #[must_use]
     pub fn current_dir(mut self, directory: impl AsRef<Path>) -> Self {
         self.current_directory = Some(directory.as_ref().to_path_buf());
         self
     }
 
     /// Adds or replaces one child environment variable.
+    #[must_use]
     pub fn env(mut self, key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) -> Self {
         self.environment
             .push((key.as_ref().to_owned(), value.as_ref().to_owned()));
@@ -200,12 +204,14 @@ impl StdioCommand {
 
     /// Clears the inherited child environment before applying values supplied
     /// with [`Self::env`].
+    #[must_use]
     pub const fn env_clear(mut self) -> Self {
         self.clear_environment = true;
         self
     }
 
     /// Replaces the default protocol and process limits.
+    #[must_use]
     pub const fn limits(mut self, limits: HarnessLimits) -> Self {
         self.limits = limits;
         self
@@ -313,10 +319,8 @@ impl StdioHarness {
         )
         .await
         .map_err(|_| HarnessError::Timeout("stdout read"))??;
-        line.map(|bytes| {
-            serde_json::from_slice(&bytes).map_err(|_| HarnessError::NonJsonStdout)
-        })
-        .transpose()
+        line.map(|bytes| serde_json::from_slice(&bytes).map_err(|_| HarnessError::NonJsonStdout))
+            .transpose()
     }
 
     /// Reads one bounded UTF-8-lossy diagnostic line from child stderr.

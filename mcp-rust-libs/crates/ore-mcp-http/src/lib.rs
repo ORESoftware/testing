@@ -107,18 +107,21 @@ impl DiagnosticClientConfig {
     }
 
     /// Sets the connection timeout.
+    #[must_use]
     pub const fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
         self
     }
 
     /// Sets the total request timeout.
+    #[must_use]
     pub const fn with_request_timeout(mut self, timeout: Duration) -> Self {
         self.request_timeout = timeout;
         self
     }
 
     /// Sets the maximum successful response-body size.
+    #[must_use]
     pub const fn with_response_limit(mut self, limit: ByteLimit) -> Self {
         self.response_limit = limit;
         self
@@ -300,13 +303,18 @@ mod tests {
     fn accepts_loopback_http_and_strips_query_fragment() {
         BaseUrl::parse("http://127.0.0.2:8080/base?token=nope#fragment")
             .expect("loopback development URL is allowed");
-        BaseUrl::parse("http://dev.localhost:8080")
-            .expect("localhost subdomain is loopback");
+        BaseUrl::parse("http://dev.localhost:8080").expect("localhost subdomain is loopback");
     }
 
     #[test]
     fn endpoint_cannot_escape_or_replace_base() {
-        for value in ["/healthz", "../secret", "https://evil.example", "a//b", "a?x=1"] {
+        for value in [
+            "/healthz",
+            "../secret",
+            "https://evil.example",
+            "a//b",
+            "a?x=1",
+        ] {
             assert_eq!(
                 EndpointPath::parse(value).err(),
                 Some(DiagnosticError::InvalidEndpoint)
@@ -317,8 +325,9 @@ mod tests {
 
     #[tokio::test]
     async fn reads_a_bounded_successful_body() {
-        let base = BaseUrl::parse(&one_response(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await)
-            .expect("test base URL");
+        let base =
+            BaseUrl::parse(&one_response(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").await)
+                .expect("test base URL");
         let endpoint = EndpointPath::parse("healthz").expect("endpoint");
         let client = DiagnosticClient::new(
             DiagnosticClientConfig::new("ore-mcp-http-test/0.1")
@@ -335,10 +344,9 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_declared_and_streamed_oversized_bodies() {
-        let declared = BaseUrl::parse(
-            &one_response(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n").await,
-        )
-        .expect("test base URL");
+        let declared =
+            BaseUrl::parse(&one_response(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n").await)
+                .expect("test base URL");
         let endpoint = EndpointPath::parse("healthz").expect("endpoint");
         let client = DiagnosticClient::new(
             DiagnosticClientConfig::new("ore-mcp-http-test/0.1")
@@ -373,8 +381,8 @@ mod tests {
         )
         .expect("test base URL");
         let endpoint = EndpointPath::parse("healthz").expect("endpoint");
-        let client = DiagnosticClient::new(DiagnosticClientConfig::new("test/0.1"))
-            .expect("client");
+        let client =
+            DiagnosticClient::new(DiagnosticClientConfig::new("test/0.1")).expect("client");
         assert_eq!(
             client.get_bytes(&base, &endpoint).await.err(),
             Some(DiagnosticError::UpstreamStatus(302))

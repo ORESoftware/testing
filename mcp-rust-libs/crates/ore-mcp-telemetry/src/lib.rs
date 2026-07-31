@@ -7,7 +7,7 @@
 
 use std::{fmt, time::Duration};
 
-use opentelemetry::{KeyValue, global};
+use opentelemetry::{KeyValue, global, trace::TracerProvider as _};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
     Resource,
@@ -152,7 +152,6 @@ fn build_tracer_provider(
         .with_batch_exporter(exporter)
         .with_resource(resource)
         .build();
-    use opentelemetry::trace::TracerProvider as _;
     let tracer = provider.tracer("mcp-server");
     Ok((provider, tracer))
 }

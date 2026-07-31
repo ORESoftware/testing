@@ -84,7 +84,7 @@ pub struct TruncatedText<'a> {
     omitted_bytes: usize,
 }
 
-impl<'a> TruncatedText<'a> {
+impl TruncatedText<'_> {
     /// Returns the retained text.
     pub fn as_str(&self) -> &str {
         self.text.as_ref()
@@ -148,7 +148,6 @@ pub fn sanitized_cli_token(argument: &str) -> String {
 /// natural person and therefore must not be recorded in shared telemetry.
 #[must_use]
 pub fn is_sensitive_key(key: &str) -> bool {
-    let normalized = normalize_key(key);
     const NEEDLES: [&str; 22] = [
         "api_key",
         "apikey",
@@ -173,6 +172,8 @@ pub fn is_sensitive_key(key: &str) -> bool {
         "userid",
         "username",
     ];
+
+    let normalized = normalize_key(key);
     NEEDLES.iter().any(|needle| normalized.contains(needle))
 }
 
@@ -212,6 +213,7 @@ impl SafeError {
     }
 
     /// Adds an HTTP-like status code without adding an upstream body or URL.
+    #[must_use]
     pub const fn with_status(mut self, status: u16) -> Self {
         self.status = Some(status);
         self

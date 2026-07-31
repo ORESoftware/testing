@@ -121,10 +121,7 @@ mod tests {
     #[test]
     fn access_mode_labels_are_stable() {
         assert_eq!(AccessMode::ReadOnly.as_str(), "read_only");
-        assert_eq!(
-            AccessMode::MutationCapable.as_str(),
-            "mutation_capable"
-        );
+        assert_eq!(AccessMode::MutationCapable.as_str(), "mutation_capable");
     }
 
     #[test]

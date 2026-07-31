@@ -33,6 +33,7 @@ impl ConfigSearch {
 
     /// Adds a path relative to the executable directory, such as
     /// `../share/example-mcp-server/.cli-flags.toml`.
+    #[must_use]
     pub const fn with_installed_share_path(mut self, path: &'static str) -> Self {
         self.installed_share_path = Some(path);
         self
@@ -81,10 +82,16 @@ impl fmt::Display for ConfigError {
                 "cannot locate .cli-flags.toml; set {name} to its path"
             ),
             Self::NonUtf8Path => formatter.write_str(".cli-flags.toml path is not valid UTF-8"),
-            Self::Audit(message) => write!(formatter, "flags2env configuration audit failed: {message}"),
+            Self::Audit(message) => {
+                write!(formatter, "flags2env configuration audit failed: {message}")
+            }
             Self::Parse => formatter.write_str("flags2env could not parse command-line arguments"),
             Self::UnknownOptions(options) => {
-                write!(formatter, "unknown command-line option(s): {}", options.join(", "))
+                write!(
+                    formatter,
+                    "unknown command-line option(s): {}",
+                    options.join(", ")
+                )
             }
             Self::InvalidValues(count) => {
                 write!(formatter, "{count} command-line value(s) were invalid")

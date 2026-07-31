@@ -76,7 +76,7 @@ jobs:
           template = Path("tooling/schema-codegen/templates/result-envelope.gleam.in")
           text = template.read_text(encoding="utf-8")
           function_start = text.index("fn message_has_only_allowed_controls")
-          value_line = text.index("    let value = bit_array.to_int(code_point)", function_start)
+          value_line = text.index("    let value = string.utf_codepoint_to_int(code_point)", function_start)
           predicate_start = text.index("\n", value_line) + 1
           predicate_end = text.index("\n  })", predicate_start)
           predicate = """    value == 9

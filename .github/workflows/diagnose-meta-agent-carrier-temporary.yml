@@ -1,0 +1,86 @@
+name: Diagnose Meta-Agent carrier source once
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/diagnose-meta-agent-carrier-temporary.yml
+
+permissions:
+  contents: read
+  statuses: write
+  issues: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out carrier source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: f1d3fb515f1ad9c1876afff07ceadb9d21030cc5
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+
+      - name: Run staged diagnostics
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: f1d3fb515f1ad9c1876afff07ceadb9d21030cc5
+        run: |
+          set -euo pipefail
+
+          publish_status() {
+            local state="$1"
+            local stage="$2"
+            local description="$3"
+            gh api --method POST \
+              repos/${{ github.repository }}/statuses/$TARGET_SHA \
+              -f state="$state" \
+              -f context="meta-agent/$stage" \
+              -f description="$description" >/dev/null
+          }
+          report_failure() {
+            local stage="$1"
+            local log="$2"
+            publish_status failure "$stage" "$stage failed; diagnostic comment posted"
+            {
+              echo '<!-- meta-agent-carrier-diagnostic -->'
+              echo "## Meta-agent carrier diagnostic: \`$stage\`"
+              echo
+              echo '```text'
+              tail -n 100 "$log" \
+                | sed -E $'s/\x1B\[[0-9;]*[A-Za-z]//g' \
+                | head -c 12000
+              echo
+              echo '```'
+              echo
+              echo "Carrier: \`$TARGET_SHA\`"
+            } >/tmp/diagnostic.md
+            gh api --method POST repos/${{ github.repository }}/issues/3/comments \
+              -f body="$(cat /tmp/diagnostic.md)" >/dev/null
+            exit 1
+          }
+          run_stage() {
+            local stage="$1"
+            shift
+            publish_status pending "$stage" "$stage running"
+            if "$@" >"/tmp/$stage.log" 2>&1; then
+              publish_status success "$stage" "$stage passed"
+            else
+              report_failure "$stage" "/tmp/$stage.log"
+            fi
+          }
+
+          run_stage lockfile cargo +1.97.1 generate-lockfile
+          run_stage format cargo +1.97.1 fmt --check
+          run_stage clippy cargo +1.97.1 clippy --locked --all-targets --all-features -- -D warnings
+          run_stage tests cargo +1.97.1 test --locked --all-targets --all-features
+          run_stage contracts python3 scripts/verify_contract.py
+          run_stage javascript node --check scripts/dashboard.js
+          run_stage docker docker build -t meta-agent-control-plane:$TARGET_SHA .
+          publish_status success trusted-carrier-validation 'Rust, contracts, JavaScript, and OCI validation passed'

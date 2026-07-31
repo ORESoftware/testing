@@ -60,16 +60,39 @@ jobs:
           gleam-version: "1.17.0"
           otp-version: "29.0.1"
 
-      - name: Apply pinned native formatters and synchronize generators
+      - name: Apply semantic syntax correction and pinned native formatters
         if: steps.repair-state.outputs.needed == 'true'
         shell: bash
         working-directory: mcp-rust-libs
         run: |
           set -euo pipefail
 
-          # Keep contract behavior unchanged. In particular, the Gleam
-          # message predicate already permits tab/newline/carriage-return and
-          # rejects the forbidden C0/DEL controls, matching the schema corpus.
+          # The generated predicate's policy was correct, but JavaScript-style
+          # negated parentheses are not valid Gleam. Express the identical set
+          # directly: TAB/LF/CR are allowed; the remaining C0 controls and DEL
+          # are rejected; all other Unicode code points are allowed.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          template = Path("tooling/schema-codegen/templates/result-envelope.gleam.in")
+          text = template.read_text(encoding="utf-8")
+          old = """    !(value >= 0 && value <= 8)
+              && value != 11
+              && value != 12
+              && !(value >= 14 && value <= 31)
+              && value != 127
+          """
+          new = """    value == 9
+              || value == 10
+              || value == 13
+              || value > 31 && value != 127
+          """
+          if old in text:
+              template.write_text(text.replace(old, new, 1), encoding="utf-8")
+          elif new not in text:
+              raise SystemExit("Gleam control predicate did not match either reviewed form")
+          PY
+
           python3 scripts/regenerate-generated.py --write
           cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all
           dart format packages/dart/lib packages/dart/test
@@ -132,8 +155,9 @@ jobs:
 
           Generated Rust, Dart, and Gleam sources were formatted with their
           pinned native tools, synchronized back to generator templates, and
-          checked for deterministic regeneration drift without changing the
-          canonical contract semantics.
+          checked for deterministic regeneration drift. The Gleam control
+          predicate was translated to valid equivalent syntax without changing
+          the canonical contract policy.
           EOF
           python3 scripts/update-source-manifest.py --write
           python3 scripts/update-source-manifest.py --check

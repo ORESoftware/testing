@@ -410,7 +410,7 @@ fn new_cache<K: Hash + Eq, V>(capacity: usize) -> LruCache<K, V> {
     LruCache::new(NonZeroUsize::new(capacity).expect("validated cache capacity"))
 }
 
-fn cache_stats<K, V>(cache: &LruCache<K, V>, evictions: u64) -> CacheStats {
+fn cache_stats<K: Hash + Eq, V>(cache: &LruCache<K, V>, evictions: u64) -> CacheStats {
     let capacity = cache.cap().get();
     CacheStats {
         length: cache.len(),

@@ -36,16 +36,16 @@ jobs:
         run: rustup toolchain install "1.97.1" --profile minimal --component rustfmt
 
       - name: Install Dart
-        uses: dart-lang/setup-dart@f0eb0a59eeb1a5db3bc0a78fca591efd9b8fd321 # v1.7.1
+        uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
         with:
           sdk: "3.12.2"
 
       - name: Install Gleam
-        uses: erlef/setup-beam@b480fb7f5bf3964a6fdd59e61adf2098fe059f65 # v1.20.4
+        uses: erlef/setup-beam@ee09b1e59bb240681c382eb1f0abc6a04af72764 # v1.23.0
         with:
-          otp-version: "28.4"
-          gleam-version: "1.17.1"
-          rebar3-version: "3"
+          version-type: strict
+          gleam-version: "1.17.0"
+          otp-version: "29.0.1"
 
       - name: Repair semantics, generated templates, native formatting, and lockfile
         shell: bash

@@ -1,0 +1,16 @@
+{
+  "protocol_version": "v1",
+  "event_id": "018f5c8a-d5a7-7f7c-8d61-84f55a35fe94",
+  "occurred_at": "2026-07-30T20:00:03Z",
+  "agent": {
+    "agent_id": "bad-agent",
+    "provider": "custom",
+    "model": "invalid"
+  },
+  "kind": "progress_updated",
+  "data": {
+    "task_id": "task-invalid",
+    "progress": 1.25,
+    "summary": "This fixture must fail validation."
+  }
+}

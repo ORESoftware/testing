@@ -1,4 +1,5 @@
 name: Owner-authorize exact canonical mcp-rust-libs publication
+run-name: Owner-authorize pinned mcp-rust-libs source @ ${{ github.event.pull_request.head.sha || github.sha }}
 
 on:
   pull_request:

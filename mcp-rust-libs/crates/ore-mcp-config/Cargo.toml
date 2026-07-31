@@ -11,7 +11,7 @@ authors.workspace = true
 publish.workspace = true
 
 [dependencies]
-flags2env = { git = "https://github.com/ORESoftware/flags-2-env.git", rev = "377bff1a4e7424eb98377997a232ddc0fc700f59" }
+flags2env = { version = "=0.1.0", git = "https://github.com/ORESoftware/flags-2-env.git", rev = "377bff1a4e7424eb98377997a232ddc0fc700f59" }
 ore-mcp-safety = { path = "../ore-mcp-safety", version = "=0.1.0" }
 tracing-subscriber.workspace = true
 

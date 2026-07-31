@@ -175,11 +175,9 @@ impl DiagnosticClient {
             return Err(DiagnosticError::ResponseTooLarge(status));
         }
 
-        let capacity = response
-            .content_length()
-            .unwrap_or_default()
-            .min(self.response_limit.get() as u64) as usize;
-        let mut body = Vec::with_capacity(capacity);
+        // Do not preallocate from an untrusted `Content-Length` header. The
+        // checked append below is the sole authority for response growth.
+        let mut body = Vec::new();
         loop {
             match response.chunk().await {
                 Ok(Some(chunk)) => append_bounded(&mut body, &chunk, self.response_limit)

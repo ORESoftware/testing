@@ -539,12 +539,10 @@ fn apply_event(inner: &mut StoreInner, envelope: &EventEnvelope) {
                 task.updated_at = envelope.occurred_at;
                 applied = true;
             }
-            if applied {
-                if let Some(agent) = inner.agents.get_mut(&agent_id) {
-                    remove_completion_counter(agent, previous_outcome);
-                    agent.status = AgentStatus::Running;
-                    agent.active_task_id = Some(started.task_id.clone());
-                }
+            if applied && let Some(agent) = inner.agents.get_mut(&agent_id) {
+                remove_completion_counter(agent, previous_outcome);
+                agent.status = AgentStatus::Running;
+                agent.active_task_id = Some(started.task_id.clone());
             }
         }
         AgentEvent::ProgressUpdated(progress) => {
@@ -571,16 +569,14 @@ fn apply_event(inner: &mut StoreInner, envelope: &EventEnvelope) {
                 task.updated_at = envelope.occurred_at;
                 applied = true;
             }
-            if applied {
-                if let Some(agent) = inner.agents.get_mut(&agent_id) {
-                    remove_completion_counter(agent, previous_outcome);
-                    agent.status = if progress.blocker.is_some() {
-                        AgentStatus::Blocked
-                    } else {
-                        AgentStatus::Running
-                    };
-                    agent.active_task_id = Some(progress.task_id.clone());
-                }
+            if applied && let Some(agent) = inner.agents.get_mut(&agent_id) {
+                remove_completion_counter(agent, previous_outcome);
+                agent.status = if progress.blocker.is_some() {
+                    AgentStatus::Blocked
+                } else {
+                    AgentStatus::Running
+                };
+                agent.active_task_id = Some(progress.task_id.clone());
             }
         }
         AgentEvent::ReflectionRecorded(reflection) => {
@@ -660,11 +656,9 @@ fn apply_event(inner: &mut StoreInner, envelope: &EventEnvelope) {
                 task.updated_at = envelope.occurred_at;
                 applied = true;
             }
-            if applied {
-                if let Some(agent) = inner.agents.get_mut(&agent_id) {
-                    agent.active_task_id = None;
-                    reconcile_completion_counters(agent, previous_outcome, completed.outcome);
-                }
+            if applied && let Some(agent) = inner.agents.get_mut(&agent_id) {
+                agent.active_task_id = None;
+                reconcile_completion_counters(agent, previous_outcome, completed.outcome);
             }
         }
         AgentEvent::AgentStatusChanged(change) => {

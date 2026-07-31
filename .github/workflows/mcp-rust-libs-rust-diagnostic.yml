@@ -1,0 +1,106 @@
+name: diagnose mcp-rust-libs Rust repair
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/mcp-rust-libs-rust-diagnostic.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-diagnostic:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'incubator/mcp-rust-libs')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Check out carrier branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: incubator/mcp-rust-libs
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "1.97.1" --profile minimal --component clippy,rustfmt
+
+      - name: Apply reviewed Rust repair in the runner
+        working-directory: mcp-rust-libs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          template = Path("tooling/schema-codegen/templates/result-envelope.rs.in")
+          text = template.read_text(encoding="utf-8")
+          if "#![allow(missing_docs)]" not in text:
+              anchor = "// sha256: {{SCHEMA_SHA256}}\n\n"
+              if anchor not in text:
+                  raise SystemExit("generated Rust header anchor not found")
+              text = text.replace(anchor, anchor + "#![allow(missing_docs)]\n\n", 1)
+          with_meta = "    pub fn with_meta(mut self, meta: Metadata) -> Self {"
+          if "    #[must_use]\n" + with_meta not in text:
+              if with_meta not in text:
+                  raise SystemExit("with_meta builder not found")
+              text = text.replace(with_meta, "    #[must_use]\n" + with_meta, 1)
+          template.write_text(text, encoding="utf-8")
+
+          lib = Path("packages/rust/crates/ore-mcp-contracts/src/lib.rs")
+          text = lib.read_text(encoding="utf-8")
+          if "/// Schema-generated contract modules and validators.\n" not in text:
+              text = text.replace(
+                  "pub mod generated;",
+                  "/// Schema-generated contract modules and validators.\npub mod generated;",
+                  1,
+              )
+          if "/// SHA-256 digest of the canonical result-envelope schema.\n" not in text:
+              text = text.replace(
+                  "pub const SCHEMA_DIGEST:",
+                  "/// SHA-256 digest of the canonical result-envelope schema.\npub const SCHEMA_DIGEST:",
+                  1,
+              )
+          lib.write_text(text, encoding="utf-8")
+
+          generated_mod = Path("packages/rust/crates/ore-mcp-contracts/src/generated/mod.rs")
+          text = generated_mod.read_text(encoding="utf-8")
+          if "/// Generated result-envelope types and value validators.\n" not in text:
+              text = text.replace(
+                  "pub mod result_envelope;",
+                  "/// Generated result-envelope types and value validators.\npub mod result_envelope;",
+                  1,
+              )
+          generated_mod.write_text(text, encoding="utf-8")
+          PY
+          python3 scripts/regenerate-generated.py --write
+          cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all
+          cargo +1.97.1 generate-lockfile --manifest-path packages/rust/Cargo.toml
+
+      - name: Rust formatting
+        working-directory: mcp-rust-libs
+        run: cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all -- --check
+
+      - name: Rust default-feature tests
+        working-directory: mcp-rust-libs
+        run: cargo +1.97.1 test --locked --manifest-path packages/rust/Cargo.toml --workspace --all-targets
+
+      - name: Rust minimal-feature tests
+        working-directory: mcp-rust-libs
+        run: cargo +1.97.1 test --locked --manifest-path packages/rust/Cargo.toml --workspace --no-default-features
+
+      - name: Rust all-adapter check
+        working-directory: mcp-rust-libs
+        run: cargo +1.97.1 check --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --all-targets
+
+      - name: Rust strict Clippy
+        working-directory: mcp-rust-libs
+        run: cargo +1.97.1 clippy --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --all-targets -- -D warnings
+
+      - name: Rust documentation
+        working-directory: mcp-rust-libs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo +1.97.1 doc --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --no-deps

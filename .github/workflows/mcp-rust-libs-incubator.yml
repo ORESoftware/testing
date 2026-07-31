@@ -107,7 +107,7 @@ jobs:
         run: cargo audit --deny warnings
       - name: License, source, wildcard, and duplicate policy
         working-directory: mcp-rust-libs/packages/rust
-        run: cargo deny --config ../../deny.toml check
+        run: cargo deny check --config ../../deny.toml
 
   typescript:
     runs-on: ubuntu-24.04

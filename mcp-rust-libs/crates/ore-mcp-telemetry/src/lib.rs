@@ -29,11 +29,7 @@ pub struct TelemetrySpec {
 
 impl TelemetrySpec {
     /// Creates a telemetry identity.
-    pub const fn new(
-        name: &'static str,
-        namespace: &'static str,
-        version: &'static str,
-    ) -> Self {
+    pub const fn new(name: &'static str, namespace: &'static str, version: &'static str) -> Self {
         Self {
             name,
             namespace,

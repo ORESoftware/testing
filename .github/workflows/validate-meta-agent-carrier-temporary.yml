@@ -1,0 +1,82 @@
+name: Validate Meta-Agent carrier source once
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/validate-meta-agent-carrier-temporary.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out materialized carrier source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: incubator/meta-agent-control-plane
+          persist-credentials: false
+
+      - name: Capture carrier head
+        id: head
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Mark validation pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.head.outputs.sha }}
+        run: |
+          gh api --method POST \
+            repos/${{ github.repository }}/statuses/$TARGET_SHA \
+            -f state=pending \
+            -f context=meta-agent/trusted-carrier-validation \
+            -f description='Pinned Rust, contracts, and OCI validation running' >/dev/null
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+
+      - name: Validate source
+        id: checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 generate-lockfile
+          cargo +1.97.1 fmt --check
+          cargo +1.97.1 clippy --locked --all-targets --all-features -- -D warnings
+          cargo +1.97.1 test --locked --all-targets --all-features
+          python3 scripts/verify_contract.py
+          node --check scripts/dashboard.js
+          git diff --check
+          if git grep -nE '^(<<<<<<<|=======|>>>>>>>)'; then
+            echo 'Conflict markers found.' >&2
+            exit 1
+          fi
+          docker build -t meta-agent-control-plane:${{ steps.head.outputs.sha }} .
+
+      - name: Publish final validation status
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.head.outputs.sha }}
+          CHECK_OUTCOME: ${{ steps.checks.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$CHECK_OUTCOME" = success ]]; then
+            state=success
+            description='Rust, contracts, JavaScript, and OCI validation passed'
+          else
+            state=failure
+            description='Trusted carrier validation failed; inspect Actions logs'
+          fi
+          gh api --method POST \
+            repos/${{ github.repository }}/statuses/$TARGET_SHA \
+            -f state="$state" \
+            -f context=meta-agent/trusted-carrier-validation \
+            -f description="$description" >/dev/null

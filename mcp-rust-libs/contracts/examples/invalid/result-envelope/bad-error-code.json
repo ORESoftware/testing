@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "UPPER CASE SECRET",
+    "message": "invalid code",
+    "retryable": false
+  },
+  "ok": false
+}

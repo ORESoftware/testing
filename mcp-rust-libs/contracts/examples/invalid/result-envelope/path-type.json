@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "bad.path",
+    "message": "wrong path type",
+    "path": "field",
+    "retryable": false
+  },
+  "ok": false
+}

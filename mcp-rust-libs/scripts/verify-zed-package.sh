@@ -1,12 +1,9 @@
 #!/bin/sh
 set -eu
-
-root=${1:-.}
+root=${1:-$(pwd)}
 cd "$root"
-
-test -f Cargo.toml
-test -f Cargo.lock
-test -f README.md
-test -f crates/ore-mcp-runtime/Cargo.toml
-test -f crates/ore-mcp-testkit/Cargo.toml
-cargo test --locked --workspace --all-features
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/regenerate-generated.py --check
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/static-source-checks.py
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/check-scaffold.py
+PYTHONDONTWRITEBYTECODE=1 python3 tooling/conformance/run.py
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/check-scaffold.py

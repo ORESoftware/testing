@@ -1,5 +1,5 @@
 {
-  description = "Shared Rust libraries for ORESoftware MCP servers";
+  description = "Polyglot shared infrastructure and contracts for ORESoftware MCP servers";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -10,7 +10,21 @@
     in {
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
-          packages = with pkgs; [ cargo clippy rustc rustfmt cargo-audit cargo-deny ];
+          packages = with pkgs; [
+            cargo
+            clippy
+            rustc
+            rustfmt
+            cargo-audit
+            cargo-deny
+            nodejs_22
+            dart
+            gleam
+            erlang
+            python3
+            gnumake
+            git
+          ];
           RUST_BACKTRACE = "1";
         };
       });

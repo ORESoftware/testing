@@ -1,10 +1,11 @@
+
 [package]
-org = "ORESoftware"
+org = "oresoftware"
 name = "mcp-rust-libs"
 version = "0.1.0"
-description = "Shared bounded, observable, and testable Rust infrastructure for MCP servers"
+description = "Polyglot, schema-driven shared infrastructure for hardened MCP servers"
 license = "MIT OR Apache-2.0"
-keywords = ["mcp", "rust", "telemetry", "testing", "security"]
+keywords = ["mcp", "rust", "typescript", "dart", "gleam", "json-schema"]
 
 [package.repository]
 vcs = "git"
@@ -13,14 +14,48 @@ url = "https://github.com/ORESoftware/mcp-rust-libs"
 [publish]
 include_readme = true
 tag_format = "v{version}"
-smoke_test = "sh \"$ZED_PKG_TEST_TARGET/scripts/verify-zed-package.sh\" \"$ZED_PKG_TEST_TARGET\""
+smoke_test = 'sh "$ZED_PKG_TEST_TARGET/scripts/verify-zed-package.sh" "$ZED_PKG_TEST_TARGET"'
 exclude = [
   ".git/**",
-  "target/**",
+  ".github/**",
+  ".zed/**",
+  "**/.dart_tool/**",
+  "**/.gradle/**",
+  "**/.gleam/**",
+  "**/.npm/**",
+  "**/.pnpm-store/**",
+  "**/_build/**",
+  "**/build/**",
+  "**/coverage/**",
+  "**/deps/**",
+  "**/node_modules/**",
+  "**/__pycache__/**",
+  "**/*.pyc",
+  "**/target/**",
+  "**/*.pem",
+  "**/*.key",
+  "**/.env*",
 ]
 
-[install]
-adapter = "none"
+[targets.rust]
+dir = "packages/rust"
+ecosystem = "cargo"
+package = "ore-mcp"
+
+[targets.nodejs]
+dir = "packages/typescript"
+ecosystem = "npm"
+package = "@oresoftware/mcp-contracts"
+
+[targets.dart]
+dir = "packages/dart"
+ecosystem = "pub"
+package = "ore_mcp_contracts"
+
+[targets.gleam]
+dir = "packages/gleam"
+ecosystem = "gleam"
+package = "ore_mcp_contracts"
 
 [scripts]
-test = "cargo test --locked --workspace --all-features"
+test = "python3 scripts/check-scaffold.py && python3 tooling/conformance/run.py"

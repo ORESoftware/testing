@@ -1,0 +1,30 @@
+{
+  "format": "ore-mcp-generator-map/v1",
+  "outputs": [
+    {
+      "output": "packages/rust/crates/ore-mcp-contracts/src/generated/result_envelope.rs",
+      "template": "tooling/schema-codegen/templates/result-envelope.rs.in"
+    },
+    {
+      "output": "packages/typescript/src/generated/result-envelope.ts",
+      "template": "tooling/schema-codegen/templates/result-envelope.ts.in"
+    },
+    {
+      "output": "packages/typescript/dist/generated/result-envelope.js",
+      "template": "tooling/schema-codegen/templates/result-envelope.js.in"
+    },
+    {
+      "output": "packages/typescript/dist/generated/result-envelope.d.ts",
+      "template": "tooling/schema-codegen/templates/result-envelope.d.ts.in"
+    },
+    {
+      "output": "packages/dart/lib/src/generated/result_envelope.dart",
+      "template": "tooling/schema-codegen/templates/result-envelope.dart.in"
+    },
+    {
+      "output": "packages/gleam/src/ore_mcp_contracts/generated/result_envelope.gleam",
+      "template": "tooling/schema-codegen/templates/result-envelope.gleam.in"
+    }
+  ],
+  "schema_path": "contracts/schemas/common/v1/result-envelope.schema.json"
+}

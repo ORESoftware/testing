@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": "bad.path",
+    "message": "wrong component type",
+    "path": [
+      1
+    ],
+    "retryable": false
+  },
+  "ok": false
+}

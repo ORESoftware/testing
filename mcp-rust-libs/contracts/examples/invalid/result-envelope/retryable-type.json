@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "bad.retryable",
+    "message": "wrong type",
+    "retryable": "false"
+  },
+  "ok": false
+}

@@ -1,5 +1,9 @@
+
 # Contributing
 
-Keep crates small and contracts explicit. A proposal to extract code must identify at least two consumers, the parity fixtures that protect them, the security boundary, and the repository-local extension point.
-
-Before opening a pull request, run formatting, Clippy, all-feature tests, no-default-feature tests, documentation, and the dependency audit. Do not commit credentials or generated customer data.
+1. Keep product-specific logic out of this repository.
+2. Change schemas before generated files; run the generator and conformance checks.
+3. Add at least one valid and one focused invalid fixture for every new constraint.
+4. Do not hand-edit generated files.
+5. Keep diagnostics bounded and secret-free.
+6. Preserve ordinary native ecosystem workflows; Zed and Nix are additive, not mandatory.

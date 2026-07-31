@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "error": {
+    "code": "invalid.control",
+    "message": "bad\u0001message",
+    "retryable": false
+  }
+}

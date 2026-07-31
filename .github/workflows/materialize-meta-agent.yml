@@ -1,4 +1,4 @@
-name: Materialize and publish Meta-Agent Control Plane
+name: Publish Meta-Agent Control Plane to canonical organization
 
 on:
   push:
@@ -7,76 +7,53 @@ on:
   pull_request:
     branches:
       - master
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  materialize:
+  publish:
     if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Check out bootstrap branch
+      - name: Check out materialized source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: incubator/meta-agent-control-plane
-          persist-credentials: true
+          persist-credentials: false
           fetch-depth: 0
 
-      - name: Reconstruct and verify source
+      - name: Validate the ordinary source carrier
         shell: bash
         run: |
           set -euo pipefail
-          cat .bootstrap/chunk-* > /tmp/source.b64
-          base64 -d /tmp/source.b64 > /tmp/source.tar.gz
-          printf '%s  %s\n' \
-            '3be3436c7a2b01ab85a68f6de8bd7ec11fed1d8631b0157c315e8362ee21dc63' \
-            /tmp/source.tar.gz | sha256sum -c -
-          mkdir /tmp/source
-          python3 - <<'PY'
-          import pathlib
-          import tarfile
-
-          archive = pathlib.Path('/tmp/source.tar.gz')
-          root = pathlib.Path('/tmp/source').resolve()
-          with tarfile.open(archive, 'r:gz') as tar:
-              for member in tar.getmembers():
-                  target = (root / member.name).resolve()
-                  if target != root and root not in target.parents:
-                      raise SystemExit(f'unsafe path: {member.name}')
-                  if member.issym() or member.islnk():
-                      raise SystemExit(f'links forbidden: {member.name}')
-              tar.extractall(root)
-          PY
-
-      - name: Replace bootstrap data with ordinary source without mutating workflows
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp .github/workflows/materialize-meta-agent.yml /tmp/materialize-meta-agent.yml
-          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          cp -a /tmp/source/. .
+          test -f Cargo.toml
+          test -f src/main.rs
+          test -f src/lib.rs
           test -f .github/workflows/ci.yml
-          mv .github/workflows/ci.yml .meta-agent-ci.yml.pending
-          cp /tmp/materialize-meta-agent.yml .github/workflows/materialize-meta-agent.yml
-          git add -A
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'feat: materialize meta-agent control plane source'
-          git push origin HEAD:incubator/meta-agent-control-plane
+          test -f scripts/verify_contract.py
+          test ! -d .bootstrap
+          git diff --check
+          ! grep -R -n -E '^(<<<<<<<|=======|>>>>>>>)' \
+            --exclude-dir=.git \
+            --exclude='*.lock' .
+          python3 scripts/verify_contract.py
 
-      - name: Prepare the canonical target tree
+      - name: Prepare a workflow-scope-neutral canonical tree
         id: canonical
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name 'ORESoftware publication automation'
+          git config user.email 'bot@oresoftware.dev'
           git rm .github/workflows/materialize-meta-agent.yml
-          git add -A
-          git commit -m 'build: remove temporary source carrier workflow'
+          git mv .github/workflows/ci.yml .meta-agent-ci.yml.pending
+          git commit -m 'build: prepare canonical Meta Agents repository'
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Create and push the canonical Meta Agents repository
+      - name: Create and push the canonical repository
         shell: bash
         env:
           GITHUB_REPOSITORY_ADMIN_TOKEN: ${{ secrets.META_AGENTS_DEMO_REPOSITORY_ADMIN_TOKEN || secrets.REMOTE_DEV_GH_PAT || secrets.ORG_GITOPS_TOKEN || secrets.GITHUB_REPOSITORY_ADMIN_TOKEN }}
@@ -84,7 +61,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${GITHUB_REPOSITORY_ADMIN_TOKEN:-}" ]]; then
-            echo '::error::No Meta Agents repository-administration credential is configured.'
+            echo '::error::No Meta Agents repository-administration credential is configured in ORESoftware/testing.'
             exit 78
           fi
           printf '::add-mask::%s\n' "$GITHUB_REPOSITORY_ADMIN_TOKEN"
@@ -147,7 +124,6 @@ jobs:
           esac
           SH
           chmod 700 /tmp/git-askpass
-          git remote remove canonical 2>/dev/null || true
           git remote add canonical https://github.com/meta-agents-demo/meta-agent-control-plane.rs.git
           GIT_ASKPASS=/tmp/git-askpass GIT_TERMINAL_PROMPT=0 \
             git push canonical HEAD:refs/heads/main

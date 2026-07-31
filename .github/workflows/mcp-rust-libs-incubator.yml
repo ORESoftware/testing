@@ -12,13 +12,169 @@ permissions:
 
 concurrency:
   group: mcp-rust-libs-incubator-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 defaults:
   run:
     working-directory: mcp-rust-libs
 
 jobs:
+  owner-authorized-publication:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.number == 2 &&
+       github.event.pull_request.draft == true &&
+       github.event.pull_request.user.login == 'ORESoftware' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'incubator/mcp-rust-libs')
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: .
+    env:
+      COMMENT_TOKEN: ${{ github.token }}
+      EXPECTED_LOGIN: ORESoftware
+      GH_CONFIG_DIR: ${{ runner.temp }}/mcp-rust-libs-owner-auth
+      K8S_TRUSTED_SHA: d94667636ebf66ac9423617e7cc0e7b88e11d4ed
+      SOURCE_REPOSITORY: ORESoftware/testing
+      SOURCE_SHA: 069b1aa4251658c8348d2eb477ad71369d9b742b
+      SOURCE_SUBTREE: mcp-rust-libs
+      SOURCE_MANIFEST_SHA256: b9ba89f29dca3e5020430d3a5d35967e523d3e94db9168a91cdf24a9bd5f2a33
+      TRACKING_PR: '2'
+    steps:
+      - name: Validate immutable publication coordinates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$K8S_TRUSTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$SOURCE_REPOSITORY" = 'ORESoftware/testing'
+          test "$SOURCE_SUBTREE" = 'mcp-rust-libs'
+          test "$(gh api repos/ORESoftware/testing/commits/$SOURCE_SHA --jq .sha)" = "$SOURCE_SHA"
+          test "$(gh api repos/ORESoftware/k8s-cluster/commits/$K8S_TRUSTED_SHA --jq .sha)" = "$K8S_TRUSTED_SHA"
+
+      - name: Check out immutable reviewed publisher
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ORESoftware/k8s-cluster
+          ref: ${{ env.K8S_TRUSTED_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Obtain short-lived ORESoftware authorization and publish
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          test "$(git rev-parse HEAD)" = "$K8S_TRUSTED_SHA"
+          test -f scripts/ops/publish_mcp_rust_libs.sh
+          bash -n scripts/ops/publish_mcp_rust_libs.sh
+
+          mkdir -p "$GH_CONFIG_DIR"
+          auth_log="$RUNNER_TEMP/mcp-rust-libs-owner-auth.log"
+          auth_pid=''
+          token=''
+          : >"$auth_log"
+
+          comment() {
+            GH_TOKEN="$COMMENT_TOKEN" gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_PR}/comments" \
+              -f body="$1" >/dev/null || true
+          }
+          cleanup() {
+            if [[ -n "$auth_pid" ]] && kill -0 "$auth_pid" 2>/dev/null; then
+              kill "$auth_pid" 2>/dev/null || true
+              wait "$auth_pid" 2>/dev/null || true
+            fi
+            unset GH_TOKEN GITHUB_TOKEN GITHUB_REPOSITORY_ADMIN_TOKEN token encoded
+            rm -f "$auth_log"
+            rm -rf "$GH_CONFIG_DIR"
+          }
+          trap cleanup EXIT
+
+          run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          comment "Exact canonical mcp-rust-libs owner authorization started: ${run_url}. Source remains pinned to \`${SOURCE_REPOSITORY}@${SOURCE_SHA}:${SOURCE_SUBTREE}\`."
+
+          (
+            env -u GH_TOKEN -u GITHUB_TOKEN \
+              GH_PROMPT_DISABLED=1 \
+              NO_COLOR=1 \
+              BROWSER=/bin/false \
+              gh auth login \
+                --hostname github.com \
+                --git-protocol https \
+                --web \
+                --scopes repo \
+                --insecure-storage
+          ) >"$auth_log" 2>&1 &
+          auth_pid=$!
+
+          code=''
+          for _ in $(seq 1 45); do
+            code="$(tr -d '\r' <"$auth_log" | grep -Eo '[A-Z0-9]{4}-[A-Z0-9]{4}' | head -n1 || true)"
+            if [[ -n "$code" ]]; then
+              break
+            fi
+            if ! kill -0 "$auth_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ -z "$code" ]]; then
+            wait "$auth_pid" 2>/dev/null || true
+            auth_pid=''
+            comment "GitHub CLI did not emit a device code for ${run_url}."
+            sed -E 's/[A-Z0-9]{4}-[A-Z0-9]{4}/[REDACTED-CODE]/g' "$auth_log" >&2 || true
+            exit 1
+          fi
+
+          instruction="Open **https://github.com/login/device** and enter **\`${code}\`** now. The workflow accepts only account \`ORESoftware\` and publishes only pinned source \`${SOURCE_REPOSITORY}@${SOURCE_SHA}:${SOURCE_SUBTREE}\`. Run: ${run_url}."
+          comment "$instruction"
+          echo "DEVICE_CODE=$code"
+          echo "::notice title=GitHub device authorization::Open https://github.com/login/device and enter $code"
+
+          set +e
+          wait "$auth_pid"
+          auth_rc=$?
+          set -e
+          auth_pid=''
+          if [[ "$auth_rc" -ne 0 ]]; then
+            comment "Device authorization failed or expired for ${run_url}."
+            sed -E 's/[A-Z0-9]{4}-[A-Z0-9]{4}/[REDACTED-CODE]/g' "$auth_log" >&2 || true
+            exit "$auth_rc"
+          fi
+          rm -f "$auth_log"
+
+          actual_login="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api user --jq .login)"
+          test "$actual_login" = "$EXPECTED_LOGIN"
+          token="$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token)"
+          test -n "$token"
+          [[ "$token" != *[[:space:]]* ]]
+          echo "::add-mask::$token"
+          encoded="$(printf '%s' "$token" | base64 --wrap=0)"
+
+          printf '%s\n' "$encoded" | \
+            env -u GH_TOKEN -u GITHUB_TOKEN -u GITHUB_REPOSITORY_ADMIN_TOKEN -u CODEX_HOME \
+              bash scripts/ops/publish_mcp_rust_libs.sh "$K8S_TRUSTED_SHA"
+
+          metadata="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api repos/ORESoftware/mcp-rust-libs)"
+          jq -e '
+            .owner.login == "ORESoftware" and
+            .visibility == "public" and
+            .default_branch == "main"
+          ' <<<"$metadata" >/dev/null
+          target_id="$(jq -er '.id' <<<"$metadata")"
+          comment "Created and verified public \`ORESoftware/mcp-rust-libs\` (repository id \`${target_id}\`) from exact pinned source. Run: ${run_url}."
+
   contracts-and-layout:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

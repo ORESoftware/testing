@@ -60,41 +60,16 @@ jobs:
           gleam-version: "1.17.0"
           otp-version: "29.0.1"
 
-      - name: Configure repair commits
-        if: steps.repair-state.outputs.needed == 'true'
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Apply semantic correction and pinned native formatters
+      - name: Apply pinned native formatters and synchronize generators
         if: steps.repair-state.outputs.needed == 'true'
         shell: bash
         working-directory: mcp-rust-libs
         run: |
           set -euo pipefail
 
-          python3 - <<'PY'
-          from pathlib import Path
-
-          template = Path("tooling/schema-codegen/templates/result-envelope.gleam.in")
-          text = template.read_text(encoding="utf-8")
-          old = """    !(value >= 0 && value <= 8)
-              && !(value >= 11 && value <= 12)
-              && !(value >= 14 && value <= 31)
-              && value != 127
-          """
-          new = """    (value >= 0 && value <= 8)
-              || (value >= 11 && value <= 12)
-              || (value >= 14 && value <= 31)
-              || value == 127
-          """
-          if old in text:
-              template.write_text(text.replace(old, new, 1), encoding="utf-8")
-          elif new not in text:
-              raise SystemExit("Gleam forbidden-control predicate did not match either expected form")
-          PY
-
+          # Keep contract behavior unchanged. In particular, the Gleam
+          # message predicate already permits tab/newline/carriage-return and
+          # rejects the forbidden C0/DEL controls, matching the schema corpus.
           python3 scripts/regenerate-generated.py --write
           cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all
           dart format packages/dart/lib packages/dart/test
@@ -102,21 +77,10 @@ jobs:
             cd packages/gleam
             gleam format src test
           )
-          python3 scripts/update-source-manifest.py
 
-          git add -A .
-          if ! git diff --cached --quiet; then
-            git commit -m "style: apply pinned native MCP formatters"
-            git push origin HEAD:incubator/mcp-rust-libs
-          fi
-
-      - name: Synchronize formatted generated outputs with templates
-        if: steps.repair-state.outputs.needed == 'true'
-        shell: bash
-        working-directory: mcp-rust-libs
-        run: |
-          set -euo pipefail
-
+          # Native formatters may restyle generated Rust/Dart/Gleam outputs.
+          # Copy those exact forms back to their templates while restoring
+          # generator placeholders, so regeneration remains byte-deterministic.
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -150,23 +114,7 @@ jobs:
           PY
 
           python3 scripts/regenerate-generated.py --check
-          python3 scripts/update-source-manifest.py
-
-          git add -A .
-          if ! git diff --cached --quiet; then
-            git commit -m "build: synchronize formatted MCP generators"
-            git push origin HEAD:incubator/mcp-rust-libs
-          fi
-
-      - name: Generate the Rust lockfile and verify native drift gates
-        if: steps.repair-state.outputs.needed == 'true'
-        shell: bash
-        working-directory: mcp-rust-libs
-        run: |
-          set -euo pipefail
-
           cargo +1.97.1 generate-lockfile --manifest-path packages/rust/Cargo.toml
-          python3 scripts/update-source-manifest.py
 
           cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all --check
           dart format --output=none --set-exit-if-changed packages/dart/lib packages/dart/test
@@ -175,31 +123,32 @@ jobs:
             gleam format --check src test
           )
           python3 scripts/regenerate-generated.py --check
-          python3 scripts/update-source-manifest.py --check
 
-          git add -A .
-          if ! git diff --cached --quiet; then
-            git commit -m "build: refresh the polyglot MCP source lock"
-            git push origin HEAD:incubator/mcp-rust-libs
-          fi
-
-      - name: Mark the one-shot repair complete
-        if: steps.repair-state.outputs.needed == 'true'
-        shell: bash
-        working-directory: mcp-rust-libs
-        run: |
-          set -euo pipefail
           cat > reports/native-repair-complete.txt <<'EOF'
           Native repair toolchains:
           - Rust 1.97.1 with rustfmt
           - Dart 3.12.2
           - Gleam 1.17.0 on OTP 29.0.1
 
-          The generated Rust, Dart, and Gleam sources were formatted with their
+          Generated Rust, Dart, and Gleam sources were formatted with their
           pinned native tools, synchronized back to generator templates, and
-          checked for deterministic regeneration drift.
+          checked for deterministic regeneration drift without changing the
+          canonical contract semantics.
           EOF
-          python3 scripts/update-source-manifest.py
-          git add -A .
-          git commit -m "chore: record completed native MCP repair"
+          python3 scripts/update-source-manifest.py --write
+          python3 scripts/update-source-manifest.py --check
+
+      - name: Commit the exact native repair
+        if: steps.repair-state.outputs.needed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A mcp-rust-libs
+          if git diff --cached --quiet; then
+            echo "native formatting already matched the pinned toolchains"
+            exit 0
+          fi
+          git commit -m "style: apply pinned polyglot MCP formatters"
           git push origin HEAD:incubator/mcp-rust-libs

@@ -209,7 +209,9 @@ mod tests {
         let kinds = document["x-meta-agent-event-kinds"].as_array().unwrap();
         assert_eq!(kinds.len(), EVENT_KINDS.len());
         assert_eq!(
-            document["x-meta-agent-udp-event-kinds"].as_array().map(Vec::len),
+            document["x-meta-agent-udp-event-kinds"]
+                .as_array()
+                .map(Vec::len),
             Some(UDP_EVENT_KINDS.len())
         );
         assert_eq!(document["servers"][0]["url"], "/");
@@ -239,9 +241,12 @@ mod tests {
             runtime["x-meta-agent-udp-event-kinds"]
         );
         assert_eq!(
-            checked_in["paths"].as_object().map(|paths| paths.keys().collect::<Vec<_>>()),
-            runtime["paths"].as_object().map(|paths| paths.keys().collect::<Vec<_>>())
+            checked_in["paths"]
+                .as_object()
+                .map(|paths| paths.keys().collect::<Vec<_>>()),
+            runtime["paths"]
+                .as_object()
+                .map(|paths| paths.keys().collect::<Vec<_>>())
         );
     }
-
 }

@@ -546,26 +546,16 @@ pub enum ValidationError {
     #[error("{field} must not be empty")]
     EmptyText { field: &'static str },
     #[error("{field} exceeds its {maximum}-byte limit")]
-    TextTooLong {
-        field: &'static str,
-        maximum: usize,
-    },
+    TextTooLong { field: &'static str, maximum: usize },
     #[error("{field} contains more than {maximum} values")]
-    TooManyValues {
-        field: &'static str,
-        maximum: usize,
-    },
+    TooManyValues { field: &'static str, maximum: usize },
     #[error("{field} must be a finite number between 0 and 1")]
     InvalidUnitInterval { field: &'static str },
     #[error("task attempts start at 1")]
     InvalidAttempt,
 }
 
-fn validate_text(
-    field: &'static str,
-    value: &str,
-    maximum: usize,
-) -> Result<(), ValidationError> {
+fn validate_text(field: &'static str, value: &str, maximum: usize) -> Result<(), ValidationError> {
     if value.trim().is_empty() {
         return Err(ValidationError::EmptyText { field });
     }

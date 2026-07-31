@@ -62,9 +62,9 @@ pub async fn serve(
         }
 
         let response = match store.ingest(event, Transport::Udp).await {
-            Ok(ack) => serde_json::to_value(ack).unwrap_or_else(|error| {
-                json!({ "error": "serialization_failed", "message": error.to_string() })
-            }),
+            Ok(ack) => serde_json::to_value(ack).unwrap_or_else(
+                |error| json!({ "error": "serialization_failed", "message": error.to_string() }),
+            ),
             Err(error) => json!({ "error": "invalid_event", "message": error.to_string() }),
         };
         if let Err(error) = send_json(&socket, peer, &response).await {

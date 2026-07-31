@@ -350,10 +350,30 @@ impl Store {
             generated_at: Utc::now(),
             started_at: inner.started_at,
             revision: inner.revision,
-            agents: inner.agents.iter().map(|(_, value)| value).cloned().collect(),
-            goals: inner.goals.iter().map(|(_, value)| value).cloned().collect(),
-            tasks: inner.tasks.iter().map(|(_, value)| value).cloned().collect(),
-            lessons: inner.lessons.iter().map(|(_, value)| value).cloned().collect(),
+            agents: inner
+                .agents
+                .iter()
+                .map(|(_, value)| value)
+                .cloned()
+                .collect(),
+            goals: inner
+                .goals
+                .iter()
+                .map(|(_, value)| value)
+                .cloned()
+                .collect(),
+            tasks: inner
+                .tasks
+                .iter()
+                .map(|(_, value)| value)
+                .cloned()
+                .collect(),
+            lessons: inner
+                .lessons
+                .iter()
+                .map(|(_, value)| value)
+                .cloned()
+                .collect(),
             recent_events: inner
                 .events
                 .iter()
@@ -683,12 +703,7 @@ fn ensure_agent(inner: &mut StoreInner, envelope: &EventEnvelope) {
     }
 }
 
-fn ensure_task(
-    inner: &mut StoreInner,
-    task_id: &str,
-    agent_id: &str,
-    occurred_at: DateTime<Utc>,
-) {
+fn ensure_task(inner: &mut StoreInner, task_id: &str, agent_id: &str, occurred_at: DateTime<Utc>) {
     let key = ScopedId::new(agent_id, task_id);
     if inner.tasks.peek(&key).is_some() {
         return;
@@ -720,12 +735,13 @@ fn task_counts(inner: &StoreInner, agent_id: &str) -> (u64, u64) {
         .tasks
         .iter()
         .filter(|(_, task)| task.agent_id == agent_id)
-        .fold((0_u64, 0_u64), |(completed, failed), (_, task)| {
-            match task.outcome.map(completion_bucket) {
-                Some(CompletionBucket::Completed) => (completed.saturating_add(1), failed),
-                Some(CompletionBucket::Failed) => (completed, failed.saturating_add(1)),
-                None => (completed, failed),
-            }
+        .fold((0_u64, 0_u64), |(completed, failed), (_, task)| match task
+            .outcome
+            .map(completion_bucket)
+        {
+            Some(CompletionBucket::Completed) => (completed.saturating_add(1), failed),
+            Some(CompletionBucket::Failed) => (completed, failed.saturating_add(1)),
+            None => (completed, failed),
         })
 }
 
@@ -832,11 +848,7 @@ mod tests {
         )
     }
 
-    fn completion_event(
-        agent_id: &str,
-        task_id: &str,
-        outcome: TaskOutcome,
-    ) -> EventEnvelope {
+    fn completion_event(agent_id: &str, task_id: &str, outcome: TaskOutcome) -> EventEnvelope {
         EventEnvelope::new(
             AgentRef {
                 agent_id: agent_id.to_owned(),
@@ -954,7 +966,10 @@ mod tests {
         assert_eq!(task.task.title, "Authoritative title");
         assert_eq!(task.task.goal_id.as_deref(), Some("goal-a"));
         assert_eq!(task.progress, 0.6);
-        assert_eq!(task.progress_summary.as_deref(), Some("Made measurable progress."));
+        assert_eq!(
+            task.progress_summary.as_deref(),
+            Some("Made measurable progress.")
+        );
         assert_eq!(task.next_action.as_deref(), Some("Continue validation."));
         assert_eq!(task.status, TaskStatus::Running);
         assert!(!task.inferred_from_out_of_order_event);
@@ -1095,7 +1110,10 @@ mod tests {
         );
         let original = event("agent-a", "task-a", 0.25);
         let original_id = original.event_id;
-        store.ingest(original.clone(), Transport::Http).await.unwrap();
+        store
+            .ingest(original.clone(), Transport::Http)
+            .await
+            .unwrap();
         store
             .ingest(event("agent-b", "task-b", 0.50), Transport::Tcp)
             .await

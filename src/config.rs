@@ -92,10 +92,18 @@ pub struct Config {
     )]
     pub idempotency_capacity: usize,
 
-    #[arg(long, env = "META_AGENT_UPDATE_CHANNEL_CAPACITY", default_value_t = 2_048)]
+    #[arg(
+        long,
+        env = "META_AGENT_UPDATE_CHANNEL_CAPACITY",
+        default_value_t = 2_048
+    )]
     pub update_channel_capacity: usize,
 
-    #[arg(long, env = "META_AGENT_LOG", default_value = "info,meta_agent_control_plane=debug")]
+    #[arg(
+        long,
+        env = "META_AGENT_LOG",
+        default_value = "info,meta_agent_control_plane=debug"
+    )]
     pub log_filter: String,
 
     #[arg(long, env = "META_AGENT_LOG_JSON", default_value_t = false)]
@@ -181,17 +189,13 @@ impl Config {
             }
         }
 
-        if self.max_payload_bytes == 0
-            || self.max_payload_bytes > MAX_HTTP_STREAM_PAYLOAD_BYTES
-        {
+        if self.max_payload_bytes == 0 || self.max_payload_bytes > MAX_HTTP_STREAM_PAYLOAD_BYTES {
             return Err(ConfigError::InvalidPayloadLimit {
                 maximum: MAX_HTTP_STREAM_PAYLOAD_BYTES,
             });
         }
 
-        if self.max_udp_payload_bytes == 0
-            || self.max_udp_payload_bytes > MAX_UDP_DATAGRAM_BYTES
-        {
+        if self.max_udp_payload_bytes == 0 || self.max_udp_payload_bytes > MAX_UDP_DATAGRAM_BYTES {
             return Err(ConfigError::InvalidUdpPayloadLimit {
                 maximum: MAX_UDP_DATAGRAM_BYTES,
             });
@@ -218,9 +222,7 @@ impl Config {
         {
             return Err(ConfigError::RemoteBindingRequiresAuthentication);
         }
-        if has_non_loopback_listener
-            && !self.protect_read_api
-            && !self.allow_unauthenticated_remote
+        if has_non_loopback_listener && !self.protect_read_api && !self.allow_unauthenticated_remote
         {
             return Err(ConfigError::RemoteBindingRequiresReadProtection);
         }

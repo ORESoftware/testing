@@ -83,9 +83,7 @@ impl IntoResponse for ApiError {
                 "forbidden",
                 "Cross-origin WebSocket upgrade rejected".to_owned(),
             ),
-            Self::BadRequest(message) => {
-                (StatusCode::BAD_REQUEST, "invalid_request", message)
-            }
+            Self::BadRequest(message) => (StatusCode::BAD_REQUEST, "invalid_request", message),
         };
         (status, Json(json!({ "error": code, "message": message }))).into_response()
     }
@@ -315,11 +313,7 @@ async fn ingest_event(
     headers: HeaderMap,
     payload: Result<Json<EventEnvelope>, JsonRejection>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if state
-        .auth
-        .authorize_ingest(bearer_token(&headers))
-        .is_err()
-    {
+    if state.auth.authorize_ingest(bearer_token(&headers)).is_err() {
         state.store.record_rejection(Transport::Http).await;
         return Err(ApiError::Unauthorized);
     }
@@ -546,12 +540,7 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    use crate::{
-        auth::AuthPolicy,
-        config::Config,
-        daemon::BoundAddresses,
-        store::Store,
-    };
+    use crate::{auth::AuthPolicy, config::Config, daemon::BoundAddresses, store::Store};
 
     use super::*;
 
@@ -576,7 +565,12 @@ mod tests {
 
         let health = app
             .clone()
-            .oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(health.status(), StatusCode::OK);
@@ -614,10 +608,7 @@ mod tests {
     fn websocket_origins_are_same_origin_by_default() {
         let mut headers = HeaderMap::new();
         headers.insert(header::HOST, "127.0.0.1:8787".parse().unwrap());
-        headers.insert(
-            header::ORIGIN,
-            "http://127.0.0.1:8787".parse().unwrap(),
-        );
+        headers.insert(header::ORIGIN, "http://127.0.0.1:8787".parse().unwrap());
         assert!(websocket_origin_allowed(&headers, false));
 
         headers.insert(header::ORIGIN, "https://attacker.example".parse().unwrap());

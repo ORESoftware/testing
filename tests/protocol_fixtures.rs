@@ -14,10 +14,9 @@ fn checked_in_valid_fixtures_match_the_rust_protocol() {
 
 #[test]
 fn checked_in_invalid_fixture_is_rejected_by_domain_validation() {
-    let event: EventEnvelope = serde_json::from_str(include_str!(
-        "../fixtures/invalid-progress.json"
-    ))
-    .expect("invalid domain fixture is still valid JSON");
+    let event: EventEnvelope =
+        serde_json::from_str(include_str!("../fixtures/invalid-progress.json"))
+            .expect("invalid domain fixture is still valid JSON");
 
     assert!(event.validate().is_err());
 }

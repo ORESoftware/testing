@@ -56,20 +56,22 @@ impl Daemon {
                 address: config.http_addr,
                 source,
             })?;
-        let tcp_listener = TcpListener::bind(config.tcp_addr)
-            .await
-            .map_err(|source| DaemonError::Bind {
-                transport: "TCP",
-                address: config.tcp_addr,
-                source,
-            })?;
-        let udp_socket = UdpSocket::bind(config.udp_addr)
-            .await
-            .map_err(|source| DaemonError::Bind {
-                transport: "UDP",
-                address: config.udp_addr,
-                source,
-            })?;
+        let tcp_listener =
+            TcpListener::bind(config.tcp_addr)
+                .await
+                .map_err(|source| DaemonError::Bind {
+                    transport: "TCP",
+                    address: config.tcp_addr,
+                    source,
+                })?;
+        let udp_socket =
+            UdpSocket::bind(config.udp_addr)
+                .await
+                .map_err(|source| DaemonError::Bind {
+                    transport: "UDP",
+                    address: config.udp_addr,
+                    source,
+                })?;
 
         let addresses = BoundAddresses {
             http: http_listener.local_addr()?,

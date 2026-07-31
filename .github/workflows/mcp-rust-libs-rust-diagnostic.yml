@@ -27,7 +27,7 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install "1.97.1" --profile minimal --component clippy,rustfmt
 
-      - name: Apply reviewed Rust repair in the runner
+      - name: Apply reviewed generated-code repair in the runner
         working-directory: mcp-rust-libs
         shell: bash
         run: |
@@ -79,28 +79,59 @@ jobs:
           cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all
           cargo +1.97.1 generate-lockfile --manifest-path packages/rust/Cargo.toml
 
-      - name: Rust formatting
+      - name: Reconfirm formatting, tests, and all adapters
         working-directory: mcp-rust-libs
-        run: cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all -- --check
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all -- --check
+          cargo +1.97.1 test --locked --manifest-path packages/rust/Cargo.toml --workspace --all-targets
+          cargo +1.97.1 test --locked --manifest-path packages/rust/Cargo.toml --workspace --no-default-features
+          cargo +1.97.1 check --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --all-targets
 
-      - name: Rust default-feature tests
+      - name: Capture strict Clippy output
         working-directory: mcp-rust-libs
-        run: cargo +1.97.1 test --locked --manifest-path packages/rust/Cargo.toml --workspace --all-targets
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          cargo +1.97.1 clippy --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --all-targets -- -D warnings 2>&1 | tee "$RUNNER_TEMP/clippy.log"
+          status=${PIPESTATUS[0]}
+          echo "$status" > "$RUNNER_TEMP/clippy.status"
+          exit 0
 
-      - name: Rust minimal-feature tests
+      - name: Capture rustdoc output
         working-directory: mcp-rust-libs
-        run: cargo +1.97.1 test --locked --manifest-path packages/rust/Cargo.toml --workspace --no-default-features
-
-      - name: Rust all-adapter check
-        working-directory: mcp-rust-libs
-        run: cargo +1.97.1 check --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --all-targets
-
-      - name: Rust strict Clippy
-        working-directory: mcp-rust-libs
-        run: cargo +1.97.1 clippy --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --all-targets -- -D warnings
-
-      - name: Rust documentation
-        working-directory: mcp-rust-libs
+        shell: bash
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo +1.97.1 doc --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --no-deps
+        run: |
+          set +e
+          set -o pipefail
+          cargo +1.97.1 doc --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --no-deps 2>&1 | tee "$RUNNER_TEMP/rustdoc.log"
+          status=${PIPESTATUS[0]}
+          echo "$status" > "$RUNNER_TEMP/rustdoc.status"
+          exit 0
+
+      - name: Upload exact Rust diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mcp-rust-libs-rust-diagnostics
+          path: |
+            ${{ runner.temp }}/clippy.log
+            ${{ runner.temp }}/clippy.status
+            ${{ runner.temp }}/rustdoc.log
+            ${{ runner.temp }}/rustdoc.status
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce diagnostic results
+        shell: bash
+        run: |
+          set -euo pipefail
+          clippy=$(cat "$RUNNER_TEMP/clippy.status")
+          rustdoc=$(cat "$RUNNER_TEMP/rustdoc.status")
+          echo "clippy=$clippy rustdoc=$rustdoc"
+          test "$clippy" -eq 0
+          test "$rustdoc" -eq 0

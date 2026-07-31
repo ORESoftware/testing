@@ -1,4 +1,3 @@
-
 bool isSensitiveName(String name) {
   final normalized = name.trim().toLowerCase().replaceAll(RegExp(r'[-.]'), '_');
   const names = <String>[
@@ -24,5 +23,6 @@ bool isSensitiveName(String name) {
 }
 
 Map<String, Object?> redactRecord(Map<String, Object?> input) => {
-      for (final entry in input.entries) entry.key: isSensitiveName(entry.key) ? '[REDACTED]' : entry.value,
-    };
+  for (final entry in input.entries)
+    entry.key: isSensitiveName(entry.key) ? '[REDACTED]' : entry.value,
+};

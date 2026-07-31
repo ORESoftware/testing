@@ -22,7 +22,9 @@ impl BaseUrl {
     pub fn parse(raw: &str) -> Result<Self, DiagnosticError> {
         if raw.is_empty()
             || raw.len() > 2_048
-            || raw.chars().any(|character| character.is_control() || character.is_whitespace())
+            || raw
+                .chars()
+                .any(|character| character.is_control() || character.is_whitespace())
         {
             return Err(DiagnosticError::InvalidBaseUrl);
         }
@@ -83,7 +85,9 @@ fn is_loopback(url: &Url) -> bool {
 }
 
 fn is_metadata_or_link_local(url: &Url) -> bool {
-    let Some(host) = url.host_str() else { return true; };
+    let Some(host) = url.host_str() else {
+        return true;
+    };
     let normalized = host.trim_end_matches('.').to_ascii_lowercase();
     if matches!(
         normalized.as_str(),
@@ -289,7 +293,10 @@ impl PublicDiagnosticClient {
             .with_connect_timeout(limits.connect_timeout)
             .with_request_timeout(limits.request_timeout)
             .with_response_limit(limits.response_bytes);
-        Ok(Self { base, client: DiagnosticClient::new(config)? })
+        Ok(Self {
+            base,
+            client: DiagnosticClient::new(config)?,
+        })
     }
 
     /// Fetches and parses one bounded public JSON diagnostic. A single leading
@@ -306,7 +313,9 @@ impl PublicDiagnosticClient {
     }
 
     /// Returns the sanitized authority label.
-    pub fn origin_label(&self) -> String { self.base.origin_label() }
+    pub fn origin_label(&self) -> String {
+        self.base.origin_label()
+    }
 }
 
 /// A stable diagnostic error that excludes URLs, credentials, and bodies.
@@ -503,5 +512,4 @@ mod tests {
         let base = BaseUrl::parse("https://example.com/base").expect("base URL");
         assert_eq!(base.origin_label(), "https://example.com");
     }
-
 }

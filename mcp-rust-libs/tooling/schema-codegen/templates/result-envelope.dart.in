@@ -4,7 +4,9 @@
 
 final RegExp _requestIdPattern = RegExp(r'^[A-Za-z0-9._:-]+$');
 final RegExp _errorCodePattern = RegExp(r'^[a-z][a-z0-9_.-]*$');
-final RegExp _forbiddenControlPattern = RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]');
+final RegExp _forbiddenControlPattern = RegExp(
+  r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]',
+);
 
 int _codePointLength(String value) => value.runes.length;
 
@@ -12,7 +14,12 @@ sealed class ResultEnvelope {
   const ResultEnvelope();
 
   factory ResultEnvelope.fromJson(Object? input) {
-    final map = _asClosedMap(input, const {'ok', 'data', 'meta', 'error'}, r'$');
+    final map = _asClosedMap(input, const {
+      'ok',
+      'data',
+      'meta',
+      'error',
+    }, r'$');
     if (!map.containsKey('ok')) {
       throw const ContractValidationException('required', r'$/ok');
     }
@@ -24,7 +31,9 @@ sealed class ResultEnvelope {
       }
       return SuccessEnvelope(
         data: map['data'],
-        meta: map.containsKey('meta') ? ResultMetadata.fromJson(map['meta']) : null,
+        meta: map.containsKey('meta')
+            ? ResultMetadata.fromJson(map['meta'])
+            : null,
       );
     }
     if (ok == false) {
@@ -34,7 +43,9 @@ sealed class ResultEnvelope {
       }
       return FailureEnvelope(
         error: SafeError.fromJson(map['error']),
-        meta: map.containsKey('meta') ? ResultMetadata.fromJson(map['meta']) : null,
+        meta: map.containsKey('meta')
+            ? ResultMetadata.fromJson(map['meta'])
+            : null,
       );
     }
     throw const ContractValidationException('const', r'$/ok');
@@ -51,10 +62,10 @@ final class SuccessEnvelope extends ResultEnvelope {
 
   @override
   Map<String, Object?> toJson() => {
-        'ok': true,
-        'data': data,
-        if (meta != null) 'meta': meta!.toJson(),
-      };
+    'ok': true,
+    'data': data,
+    if (meta != null) 'meta': meta!.toJson(),
+  };
 }
 
 final class FailureEnvelope extends ResultEnvelope {
@@ -65,14 +76,18 @@ final class FailureEnvelope extends ResultEnvelope {
 
   @override
   Map<String, Object?> toJson() => {
-        'ok': false,
-        'error': error.toJson(),
-        if (meta != null) 'meta': meta!.toJson(),
-      };
+    'ok': false,
+    'error': error.toJson(),
+    if (meta != null) 'meta': meta!.toJson(),
+  };
 }
 
 final class ResultMetadata {
-  factory ResultMetadata({String? requestId, bool truncated = false, int omittedBytes = 0}) {
+  factory ResultMetadata({
+    String? requestId,
+    bool truncated = false,
+    int omittedBytes = 0,
+  }) {
     _validateRequestId(requestId, r'$/meta/request_id');
     _validateOmittedBytes(omittedBytes, r'$/meta/omitted_bytes');
     return ResultMetadata._(
@@ -82,10 +97,18 @@ final class ResultMetadata {
     );
   }
 
-  const ResultMetadata._({this.requestId, required this.truncated, required this.omittedBytes});
+  const ResultMetadata._({
+    this.requestId,
+    required this.truncated,
+    required this.omittedBytes,
+  });
 
   factory ResultMetadata.fromJson(Object? input) {
-    final map = _asClosedMap(input, const {'request_id', 'truncated', 'omitted_bytes'}, r'$/meta');
+    final map = _asClosedMap(input, const {
+      'request_id',
+      'truncated',
+      'omitted_bytes',
+    }, r'$/meta');
     String? requestId;
     if (map.containsKey('request_id')) {
       final raw = map['request_id'];
@@ -95,7 +118,9 @@ final class ResultMetadata {
       requestId = raw;
     }
     final truncated = map.containsKey('truncated') ? map['truncated'] : false;
-    final omittedBytes = map.containsKey('omitted_bytes') ? map['omitted_bytes'] : 0;
+    final omittedBytes = map.containsKey('omitted_bytes')
+        ? map['omitted_bytes']
+        : 0;
     if (truncated is! bool) {
       throw const ContractValidationException('type', r'$/meta/truncated');
     }
@@ -114,10 +139,10 @@ final class ResultMetadata {
   final int omittedBytes;
 
   Map<String, Object?> toJson() => {
-        if (requestId != null) 'request_id': requestId,
-        'truncated': truncated,
-        'omitted_bytes': omittedBytes,
-      };
+    if (requestId != null) 'request_id': requestId,
+    'truncated': truncated,
+    'omitted_bytes': omittedBytes,
+  };
 }
 
 final class SafeError {
@@ -146,10 +171,18 @@ final class SafeError {
   });
 
   factory SafeError.fromJson(Object? input) {
-    final map = _asClosedMap(input, const {'code', 'message', 'path', 'retryable'}, r'$/error');
+    final map = _asClosedMap(input, const {
+      'code',
+      'message',
+      'path',
+      'retryable',
+    }, r'$/error');
     for (final key in const ['code', 'message', 'retryable']) {
       if (!map.containsKey(key)) {
-        throw ContractValidationException('required', _joinPath(r'$/error', key));
+        throw ContractValidationException(
+          'required',
+          _joinPath(r'$/error', key),
+        );
       }
     }
     final code = map['code'];
@@ -175,13 +208,21 @@ final class SafeError {
       for (var index = 0; index < rawPath.length; index += 1) {
         final component = rawPath[index];
         if (component is! String) {
-          throw ContractValidationException('type', _joinPath(r'$/error/path', '$index'));
+          throw ContractValidationException(
+            'type',
+            _joinPath(r'$/error/path', '$index'),
+          );
         }
         values.add(component);
       }
       path = List<String>.unmodifiable(values);
     }
-    return SafeError(code: code, message: message, path: path, retryable: retryable);
+    return SafeError(
+      code: code,
+      message: message,
+      path: path,
+      retryable: retryable,
+    );
   }
 
   final String code;
@@ -190,11 +231,11 @@ final class SafeError {
   final bool retryable;
 
   Map<String, Object?> toJson() => {
-        'code': code,
-        'message': message,
-        'path': path,
-        'retryable': retryable,
-      };
+    'code': code,
+    'message': message,
+    'path': path,
+    'retryable': retryable,
+  };
 }
 
 final class ContractValidationException implements Exception {
@@ -269,7 +310,11 @@ void _validatePath(List<String> value, String path) {
   }
 }
 
-Map<String, Object?> _asClosedMap(Object? input, Set<String> allowed, String path) {
+Map<String, Object?> _asClosedMap(
+  Object? input,
+  Set<String> allowed,
+  String path,
+) {
   if (input is! Map) {
     throw ContractValidationException('type', path);
   }
@@ -286,9 +331,13 @@ Map<String, Object?> _asClosedMap(Object? input, Set<String> allowed, String pat
 }
 
 void _rejectKeys(Map<String, Object?> input, Set<String> allowed, String path) {
-  final unknown = input.keys.where((key) => !allowed.contains(key)).toList()..sort();
+  final unknown = input.keys.where((key) => !allowed.contains(key)).toList()
+    ..sort();
   if (unknown.isNotEmpty) {
-    throw ContractValidationException('additional_properties', _joinPath(path, unknown.first));
+    throw ContractValidationException(
+      'additional_properties',
+      _joinPath(path, unknown.first),
+    );
   }
 }
 

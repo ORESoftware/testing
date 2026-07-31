@@ -32,7 +32,9 @@ impl ByteLimit {
     }
 
     /// Returns whether the configured budget is zero.
-    pub const fn is_zero(self) -> bool { self.0 == 0 }
+    pub const fn is_zero(self) -> bool {
+        self.0 == 0
+    }
 }
 
 /// Describes an attempted append that would cross a configured byte limit.
@@ -223,7 +225,9 @@ impl ItemLimit {
     }
 
     /// Returns the configured item count.
-    pub const fn get(self) -> usize { self.0 }
+    pub const fn get(self) -> usize {
+        self.0
+    }
 }
 
 /// A non-zero nesting-depth limit.
@@ -237,7 +241,9 @@ impl DepthLimit {
     }
 
     /// Returns the configured depth.
-    pub const fn get(self) -> usize { self.0 }
+    pub const fn get(self) -> usize {
+        self.0
+    }
 }
 
 /// A non-zero timeout bound.
@@ -247,11 +253,17 @@ pub struct TimeoutLimit(Duration);
 impl TimeoutLimit {
     /// Creates a validated non-zero timeout.
     pub const fn new(timeout: Duration) -> Option<Self> {
-        if timeout.is_zero() { None } else { Some(Self(timeout)) }
+        if timeout.is_zero() {
+            None
+        } else {
+            Some(Self(timeout))
+        }
     }
 
     /// Returns the configured timeout.
-    pub const fn get(self) -> Duration { self.0 }
+    pub const fn get(self) -> Duration {
+        self.0
+    }
 }
 
 /// An owned byte buffer whose growth is checked against one immutable budget.
@@ -264,13 +276,19 @@ pub struct BoundedBytes {
 impl BoundedBytes {
     /// Creates an empty bounded buffer.
     pub const fn new(limit: ByteLimit) -> Self {
-        Self { limit, bytes: Vec::new() }
+        Self {
+            limit,
+            bytes: Vec::new(),
+        }
     }
 
     /// Creates a bounded buffer without trusting the requested capacity beyond
     /// the configured limit.
     pub fn with_capacity(limit: ByteLimit, requested: usize) -> Self {
-        Self { limit, bytes: Vec::with_capacity(requested.min(limit.get())) }
+        Self {
+            limit,
+            bytes: Vec::with_capacity(requested.min(limit.get())),
+        }
     }
 
     /// Appends one chunk atomically when it fits.
@@ -279,13 +297,19 @@ impl BoundedBytes {
     }
 
     /// Returns the current byte length.
-    pub const fn len(&self) -> usize { self.bytes.len() }
+    pub const fn len(&self) -> usize {
+        self.bytes.len()
+    }
 
     /// Returns whether the buffer is empty.
-    pub const fn is_empty(&self) -> bool { self.bytes.is_empty() }
+    pub const fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
 
     /// Consumes the wrapper and returns its bounded bytes.
-    pub fn into_inner(self) -> Vec<u8> { self.bytes }
+    pub fn into_inner(self) -> Vec<u8> {
+        self.bytes
+    }
 }
 
 /// An owned, serialization-friendly truncation result.
@@ -307,12 +331,22 @@ pub fn truncate_utf8_owned(value: impl Into<String>, limit: ByteLimit) -> OwnedT
     let mut value = value.into();
     let original_len = value.len();
     if original_len <= limit.get() {
-        return OwnedTruncatedText { value, truncated: false, omitted_bytes: 0 };
+        return OwnedTruncatedText {
+            value,
+            truncated: false,
+            omitted_bytes: 0,
+        };
     }
 
-    let suffix = if limit.get() >= SUFFIX.len() { SUFFIX } else { "" };
+    let suffix = if limit.get() >= SUFFIX.len() {
+        SUFFIX
+    } else {
+        ""
+    };
     let mut end = limit.get().saturating_sub(suffix.len()).min(value.len());
-    while end > 0 && !value.is_char_boundary(end) { end -= 1; }
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
     value.truncate(end);
     value.push_str(suffix);
     OwnedTruncatedText {
@@ -324,7 +358,9 @@ pub fn truncate_utf8_owned(value: impl Into<String>, limit: ByteLimit) -> OwnedT
 
 /// Compatibility name for secret/identity key detection.
 #[must_use]
-pub fn is_sensitive_name(name: &str) -> bool { is_sensitive_key(name) }
+pub fn is_sensitive_name(name: &str) -> bool {
+    is_sensitive_key(name)
+}
 
 /// Returns whether a telemetry key is reserved for validated service identity.
 #[must_use]
@@ -343,7 +379,9 @@ pub fn valid_label_name(name: &str) -> bool {
 
 /// Validates a bounded telemetry label value.
 #[must_use]
-pub fn valid_label_value(value: &str) -> bool { valid_attribute_value(value) }
+pub fn valid_label_value(value: &str) -> bool {
+    valid_attribute_value(value)
+}
 
 /// Validates stable service identity values while excluding whitespace,
 /// controls, and free-form user data.
@@ -427,8 +465,9 @@ mod tests {
     fn label_policy_rejects_sensitive_and_free_form_identity() {
         assert!(valid_label_name("cloud.region"));
         assert!(!valid_label_name("api.token"));
-        assert!(valid_service_identity_value("canonical-mcp-server/1.2.3+build"));
+        assert!(valid_service_identity_value(
+            "canonical-mcp-server/1.2.3+build"
+        ));
         assert!(!valid_service_identity_value("user supplied label"));
     }
-
 }

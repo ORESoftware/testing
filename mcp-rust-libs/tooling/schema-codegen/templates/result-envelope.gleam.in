@@ -9,11 +9,7 @@ import gleam/result
 import gleam/string
 
 pub type Metadata {
-  Metadata(
-    request_id: Option(String),
-    truncated: Bool,
-    omitted_bytes: Int,
-  )
+  Metadata(request_id: Option(String), truncated: Bool, omitted_bytes: Int)
 }
 
 pub type SafeError {
@@ -37,7 +33,9 @@ pub type ContractError {
   ContractError(code: String, path: String)
 }
 
-pub fn validate(value: ResultEnvelope(data)) -> Result(ResultEnvelope(data), ContractError) {
+pub fn validate(
+  value: ResultEnvelope(data),
+) -> Result(ResultEnvelope(data), ContractError) {
   case value {
     Success(SuccessEnvelope(_, meta)) ->
       validate_meta(meta)
@@ -183,7 +181,10 @@ fn validate_path(path: List(String)) -> Result(Nil, ContractError) {
   validate_path_components(path, 0)
 }
 
-fn validate_path_components(path: List(String), index: Int) -> Result(Nil, ContractError) {
+fn validate_path_components(
+  path: List(String),
+  index: Int,
+) -> Result(Nil, ContractError) {
   case path {
     [] -> Ok(Nil)
     [part, ..rest] -> {
@@ -233,21 +234,17 @@ fn message_has_only_allowed_controls(value: String) -> Bool {
   |> string.to_utf_codepoints
   |> list.all(fn(code_point) {
     let value = string.utf_codepoint_to_int(code_point)
-    !(value >= 0 && value <= 8)
-      && value != 11
-      && value != 12
-      && !(value >= 14 && value <= 31)
-      && value != 127
+    value == 9 || value == 10 || value == 13 || value > 31 && value != 127
   })
 }
 
 fn is_request_id_code_point(code_point: string.UtfCodepoint) -> Bool {
   let value = string.utf_codepoint_to_int(code_point)
   is_ascii_letter_or_digit(value)
-    || value == 46
-    || value == 95
-    || value == 58
-    || value == 45
+  || value == 46
+  || value == 95
+  || value == 58
+  || value == 45
 }
 
 fn is_ascii_lower(code_point: string.UtfCodepoint) -> Bool {
@@ -257,15 +254,20 @@ fn is_ascii_lower(code_point: string.UtfCodepoint) -> Bool {
 
 fn is_error_code_tail(code_point: string.UtfCodepoint) -> Bool {
   let value = string.utf_codepoint_to_int(code_point)
-  (value >= 97 && value <= 122)
-    || (value >= 48 && value <= 57)
-    || value == 95
-    || value == 46
-    || value == 45
+  value >= 97
+  && value <= 122
+  || value >= 48
+  && value <= 57
+  || value == 95
+  || value == 46
+  || value == 45
 }
 
 fn is_ascii_letter_or_digit(value: Int) -> Bool {
-  (value >= 65 && value <= 90)
-    || (value >= 97 && value <= 122)
-    || (value >= 48 && value <= 57)
+  value >= 65
+  && value <= 90
+  || value >= 97
+  && value <= 122
+  || value >= 48
+  && value <= 57
 }

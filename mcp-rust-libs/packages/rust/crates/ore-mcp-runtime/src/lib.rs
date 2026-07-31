@@ -120,7 +120,6 @@ where
     Ok(())
 }
 
-
 /// Ordered phases for a safe MCP server bootstrap.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BootstrapPhase {
@@ -187,13 +186,19 @@ impl ServerIdentity {
     }
 
     /// Returns the validated service name.
-    pub fn service_name(&self) -> &str { &self.service_name }
+    pub fn service_name(&self) -> &str {
+        &self.service_name
+    }
 
     /// Returns the validated owning namespace.
-    pub fn service_namespace(&self) -> &str { &self.service_namespace }
+    pub fn service_namespace(&self) -> &str {
+        &self.service_namespace
+    }
 
     /// Returns the validated package/server version.
-    pub fn version(&self) -> &str { &self.version }
+    pub fn version(&self) -> &str {
+        &self.version
+    }
 }
 
 /// A value-free server identity validation failure.
@@ -228,7 +233,7 @@ pub fn server_span(identity: &ServerIdentity, access_mode: AccessMode) -> tracin
 #[macro_export]
 macro_rules! serve_stdio_with_span {
     ($server:expr, $span:expr) => {{
-        use $crate::__private::rmcp::{transport::stdio, ServiceExt as _};
+        use $crate::__private::rmcp::{ServiceExt as _, transport::stdio};
         use $crate::__private::tracing::Instrument as _;
         let __ore_span = $span;
         let __ore_service = ($server)
@@ -265,8 +270,14 @@ mod tests {
     }
     #[test]
     fn bootstrap_order_keeps_config_before_telemetry() {
-        assert_eq!(REQUIRED_BOOTSTRAP_ORDER[0], BootstrapPhase::ParseOperationalConfig);
-        assert_eq!(REQUIRED_BOOTSTRAP_ORDER[1], BootstrapPhase::InitializeTelemetry);
+        assert_eq!(
+            REQUIRED_BOOTSTRAP_ORDER[0],
+            BootstrapPhase::ParseOperationalConfig
+        );
+        assert_eq!(
+            REQUIRED_BOOTSTRAP_ORDER[1],
+            BootstrapPhase::InitializeTelemetry
+        );
     }
 
     #[test]
@@ -275,5 +286,4 @@ mod tests {
         assert!(ServerIdentity::new("bad\nname", "org", "1").is_err());
         assert!(ServerIdentity::new("user supplied", "org", "1").is_err());
     }
-
 }

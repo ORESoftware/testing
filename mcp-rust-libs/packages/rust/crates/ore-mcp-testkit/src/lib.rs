@@ -24,7 +24,6 @@ use tokio::{
     time::timeout,
 };
 
-
 /// Machine-readable result emitted by cross-language fixture runners.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FixtureResult {
@@ -55,7 +54,10 @@ impl fmt::Display for TestkitError {
             Self::Read => formatter.write_str("fixture could not be read"),
             Self::InvalidJson => formatter.write_str("fixture is not valid JSON"),
             Self::StdoutPollution(index) => {
-                write!(formatter, "stdout contains a non-protocol line at index {index}")
+                write!(
+                    formatter,
+                    "stdout contains a non-protocol line at index {index}"
+                )
             }
         }
     }
@@ -77,8 +79,7 @@ pub fn assert_json_only_stdout(stdout: &[u8]) -> Result<(), TestkitError> {
         .filter(|line| !line.is_empty())
         .enumerate()
     {
-        serde_json::from_slice::<Value>(line)
-            .map_err(|_| TestkitError::StdoutPollution(index))?;
+        serde_json::from_slice::<Value>(line).map_err(|_| TestkitError::StdoutPollution(index))?;
     }
     Ok(())
 }
@@ -578,5 +579,4 @@ mod tests {
             Err(TestkitError::StdoutPollution(0))
         ));
     }
-
 }

@@ -57,7 +57,8 @@ impl PortableConfigSearch {
     /// Resolves the first regular file from the explicit override, current
     /// directory, and executable directory. Empty overrides are ignored.
     pub fn resolve(&self) -> Result<PathBuf, OperationalConfigError> {
-        if let Some(value) = std::env::var_os(&self.override_env).filter(|value| !value.is_empty()) {
+        if let Some(value) = std::env::var_os(&self.override_env).filter(|value| !value.is_empty())
+        {
             let path = PathBuf::from(value);
             return if path.is_file() {
                 Ok(path)
@@ -68,12 +69,20 @@ impl PortableConfigSearch {
 
         let mut candidates = Vec::new();
         if let Ok(current) = std::env::current_dir() {
-            candidates.extend(self.relative_candidates.iter().map(|path| current.join(path)));
+            candidates.extend(
+                self.relative_candidates
+                    .iter()
+                    .map(|path| current.join(path)),
+            );
         }
         if let Ok(executable) = std::env::current_exe()
             && let Some(parent) = executable.parent()
         {
-            candidates.extend(self.relative_candidates.iter().map(|path| parent.join(path)));
+            candidates.extend(
+                self.relative_candidates
+                    .iter()
+                    .map(|path| parent.join(path)),
+            );
         }
         candidates
             .into_iter()

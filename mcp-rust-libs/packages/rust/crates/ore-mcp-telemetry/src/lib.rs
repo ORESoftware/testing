@@ -383,10 +383,11 @@ mod tests {
     }
     #[test]
     fn deterministic_resource_map_uses_the_same_policy() {
-        let attributes = sanitize_resource_attributes(
-            "cloud.region=us-east-1,api.token=nope,team=simulation",
+        let attributes =
+            sanitize_resource_attributes("cloud.region=us-east-1,api.token=nope,team=simulation");
+        assert_eq!(
+            attributes.keys().cloned().collect::<Vec<_>>(),
+            vec!["cloud.region", "team"]
         );
-        assert_eq!(attributes.keys().cloned().collect::<Vec<_>>(), vec!["cloud.region", "team"]);
     }
-
 }

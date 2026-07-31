@@ -7,9 +7,11 @@ import 'package:test/test.dart';
 void main() {
   final repositoryRoot = Directory.current.parent.parent;
   final examplesRoot = Directory('${repositoryRoot.path}/contracts/examples');
-  final expectationDocument = jsonDecode(
-    File('${examplesRoot.path}/expectations.json').readAsStringSync(),
-  ) as Map<String, Object?>;
+  final expectationDocument =
+      jsonDecode(
+            File('${examplesRoot.path}/expectations.json').readAsStringSync(),
+          )
+          as Map<String, Object?>;
   final fixtures = expectationDocument['fixtures']! as Map<String, Object?>;
 
   for (final entry in fixtures.entries) {

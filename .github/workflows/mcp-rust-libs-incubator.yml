@@ -3,6 +3,10 @@ name: mcp-rust-libs incubator
 on:
   push:
     branches: [incubator/mcp-rust-libs]
+  pull_request:
+    paths:
+      - .github/workflows/mcp-rust-libs-incubator.yml
+      - mcp-rust-libs/**
   workflow_dispatch:
 
 permissions:

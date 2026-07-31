@@ -1,4 +1,4 @@
-//! Feature-gated umbrella exports for ORESoftware's shared MCP infrastructure.
+//! Feature-gated umbrella exports for `ORESoftware`'s shared MCP infrastructure.
 //!
 //! Product MCP servers may depend on this crate for a coordinated feature set,
 //! or depend directly on the narrower crates when they need tighter dependency

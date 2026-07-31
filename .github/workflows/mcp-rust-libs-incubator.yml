@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mcp-rust-libs-incubator-${{ github.ref }}
+  group: mcp-rust-libs-incubator-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: false
 
 defaults:

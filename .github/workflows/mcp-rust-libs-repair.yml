@@ -1,4 +1,4 @@
-name: repair mcp-rust-libs native formatting
+name: repair mcp-rust-libs polyglot APIs
 
 on:
   pull_request:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: mcp-rust-libs-repair-${{ github.event.pull_request.head.ref || github.ref }}
+  group: mcp-rust-libs-api-repair-${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -21,7 +21,7 @@ jobs:
       (github.event.pull_request.head.repo.full_name == github.repository &&
        github.event.pull_request.head.ref == 'incubator/mcp-rust-libs')
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - name: Check out the carrier branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -34,17 +34,17 @@ jobs:
         id: repair-state
         shell: bash
         run: |
-          if [[ -f mcp-rust-libs/reports/native-repair-complete.txt ]]; then
+          if [[ -f mcp-rust-libs/reports/polyglot-api-repair-complete.txt ]]; then
             echo "needed=false" >> "$GITHUB_OUTPUT"
-            echo "The pinned native repair has already completed."
+            echo "The reviewed polyglot API repair has already completed."
           else
             echo "needed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install Rust formatter
+      - name: Install Rust toolchain
         if: steps.repair-state.outputs.needed == 'true'
         shell: bash
-        run: rustup toolchain install "1.97.1" --profile minimal --component rustfmt
+        run: rustup toolchain install "1.97.1" --profile minimal --component clippy,rustfmt
 
       - name: Install Dart
         if: steps.repair-state.outputs.needed == 'true'
@@ -60,67 +60,109 @@ jobs:
           gleam-version: "1.17.0"
           otp-version: "29.0.1"
 
-      - name: Apply semantic syntax corrections and pinned native formatters
+      - name: Reconcile generated APIs and package metadata
         if: steps.repair-state.outputs.needed == 'true'
         shell: bash
         working-directory: mcp-rust-libs
         run: |
           set -euo pipefail
 
-          # The generated predicates encoded the intended character sets, but
-          # used JavaScript-style grouping that Gleam rejects. Reconstruct each
-          # complete helper so accepted/rejected code points remain identical.
           python3 - <<'PY'
           from pathlib import Path
 
-          template = Path("tooling/schema-codegen/templates/result-envelope.gleam.in")
-          text = template.read_text(encoding="utf-8")
+          # Gleam: Option lives in gleam/option, while UtfCodepoint is a
+          # built-in type. Preserve the validated predicates and only repair
+          # the language-level names/imports required by Gleam 1.17.
+          gleam_template = Path("tooling/schema-codegen/templates/result-envelope.gleam.in")
+          gleam = gleam_template.read_text(encoding="utf-8")
+          option_import = "import gleam/option.{type Option, None, Some}\n"
+          if option_import not in gleam:
+              import_anchor = "import gleam/list\n"
+              if import_anchor not in gleam:
+                  raise SystemExit("Gleam import anchor not found")
+              gleam = gleam.replace(import_anchor, import_anchor + option_import, 1)
+          gleam = gleam.replace("string.UtfCodepoint", "UtfCodepoint")
+          gleam_template.write_text(gleam, encoding="utf-8")
 
-          def replace_function(source: str, name: str, next_name: str, replacement: str) -> str:
-              start = source.index(f"fn {name}")
-              end = source.index(f"\nfn {next_name}", start)
-              return source[:start] + replacement.rstrip() + "\n" + source[end + 1:]
+          # Rust: generated public types are schema-derived and intentionally
+          # exempt from handwritten missing-docs coverage. Keep handwritten
+          # exports documented and satisfy the meaningful builder-use lint.
+          rust_template = Path("tooling/schema-codegen/templates/result-envelope.rs.in")
+          rust = rust_template.read_text(encoding="utf-8")
+          if "#![allow(missing_docs)]" not in rust:
+              header_anchor = "// sha256: {{SCHEMA_SHA256}}\n\n"
+              if header_anchor not in rust:
+                  raise SystemExit("Rust generated header anchor not found")
+              rust = rust.replace(
+                  header_anchor,
+                  header_anchor + "#![allow(missing_docs)]\n\n",
+                  1,
+              )
+          with_meta = "    pub fn with_meta(mut self, meta: Metadata) -> Self {"
+          if "    #[must_use]\n" + with_meta not in rust:
+              if with_meta not in rust:
+                  raise SystemExit("Rust with_meta builder not found")
+              rust = rust.replace(with_meta, "    #[must_use]\n" + with_meta, 1)
+          rust_template.write_text(rust, encoding="utf-8")
 
-          text = replace_function(
-              text,
-              "message_has_only_allowed_controls",
-              "is_request_id_code_point",
-              """fn message_has_only_allowed_controls(value: String) -> Bool {
-            value
-            |> string.to_utf_codepoints
-            |> list.all(fn(code_point) {
-              let value = string.utf_codepoint_to_int(code_point)
-              value == 9
-                || value == 10
-                || value == 13
-                || value > 31 && value != 127
-            })
-          }""",
+          rust_lib = Path("packages/rust/crates/ore-mcp-contracts/src/lib.rs")
+          text = rust_lib.read_text(encoding="utf-8")
+          if "/// Schema-generated contract modules and validators.\n" not in text:
+              text = text.replace(
+                  "pub mod generated;",
+                  "/// Schema-generated contract modules and validators.\npub mod generated;",
+                  1,
+              )
+          if "/// SHA-256 digest of the canonical result-envelope schema.\n" not in text:
+              text = text.replace(
+                  "pub const SCHEMA_DIGEST:",
+                  "/// SHA-256 digest of the canonical result-envelope schema.\npub const SCHEMA_DIGEST:",
+                  1,
+              )
+          rust_lib.write_text(text, encoding="utf-8")
+
+          generated_mod = Path("packages/rust/crates/ore-mcp-contracts/src/generated/mod.rs")
+          text = generated_mod.read_text(encoding="utf-8")
+          if "/// Generated result-envelope types and value validators.\n" not in text:
+              text = text.replace(
+                  "pub mod result_envelope;",
+                  "/// Generated result-envelope types and value validators.\npub mod result_envelope;",
+                  1,
+              )
+          generated_mod.write_text(text, encoding="utf-8")
+
+          # Keep the target-repository workflow aligned with the already
+          # validated carrier invocation order for cargo-deny 0.19.
+          workflow = Path(".github/workflows/scaffold.yml")
+          text = workflow.read_text(encoding="utf-8")
+          text = text.replace(
+              "cargo deny --config ../../deny.toml check",
+              "cargo deny check --config ../../deny.toml",
           )
-          text = replace_function(
-              text,
-              "is_error_code_tail",
-              "is_ascii_letter_or_digit",
-              """fn is_error_code_tail(code_point: string.UtfCodepoint) -> Bool {
-            let value = string.utf_codepoint_to_int(code_point)
-            value >= 97 && value <= 122
-              || value >= 48 && value <= 57
-              || value == 95
-              || value == 46
-              || value == 45
-          }""",
-          )
-          # This is the final function in the template, so replace from its
-          # declaration to EOF rather than inventing a synthetic successor.
-          start = text.index("fn is_ascii_letter_or_digit")
-          text = text[:start] + """fn is_ascii_letter_or_digit(value: Int) -> Bool {
-            value >= 65 && value <= 90
-              || value >= 97 && value <= 122
-              || value >= 48 && value <= 57
-          }
-          """
-          template.write_text(text, encoding="utf-8")
+          workflow.write_text(text, encoding="utf-8")
           PY
+
+          # Dart's publication contract requires package-local license and
+          # changelog files. Carry both roots of the dual-license policy into
+          # the package instead of silently selecting one license.
+          cp LICENSE-MIT packages/dart/LICENSE-MIT
+          cp LICENSE-APACHE packages/dart/LICENSE-APACHE
+          cat > packages/dart/LICENSE <<'EOF'
+          ORESoftware MCP contracts for Dart are dual-licensed under either:
+
+          - the MIT License; or
+          - the Apache License, Version 2.0.
+
+          The complete terms are included in LICENSE-MIT and LICENSE-APACHE.
+          EOF
+          cat > packages/dart/CHANGELOG.md <<'EOF'
+          # Changelog
+
+          ## 0.1.0
+
+          - Initial schema-derived MCP result-envelope contracts and validators.
+          - Canonical fixture conformance shared with Rust, TypeScript, and Gleam.
+          EOF
 
           python3 scripts/regenerate-generated.py --write
           cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all
@@ -130,9 +172,8 @@ jobs:
             gleam format src test
           )
 
-          # Native formatters may restyle generated Rust/Dart/Gleam outputs.
-          # Copy those exact forms back to their templates while restoring
-          # generator placeholders, so regeneration remains byte-deterministic.
+          # Synchronize native formatter output back to registered templates,
+          # restoring generator placeholders so drift checks remain exact.
           python3 - <<'PY'
           import json
           from pathlib import Path
@@ -148,50 +189,88 @@ jobs:
           mapping = json.loads(
               (root / "tooling/schema-codegen/generator-map.json").read_text(encoding="utf-8")
           )
-          formatted_suffixes = {".rs", ".dart", ".gleam"}
           for item in mapping["outputs"]:
               output = root / item["output"]
-              if output.suffix not in formatted_suffixes:
+              if output.suffix not in {".rs", ".dart", ".gleam"}:
                   continue
               template = root / item["template"]
               template_text = template.read_text(encoding="utf-8")
-              text = output.read_text(encoding="utf-8")
+              generated = output.read_text(encoding="utf-8")
               for actual, placeholder in replacements:
                   if placeholder not in template_text:
                       continue
-                  if actual not in text:
+                  if actual not in generated:
                       raise SystemExit(f"missing generated header value {actual!r} in {output}")
-                  text = text.replace(actual, placeholder, 1)
-              template.write_text(text, encoding="utf-8")
+                  generated = generated.replace(actual, placeholder, 1)
+              template.write_text(generated, encoding="utf-8")
           PY
 
           python3 scripts/regenerate-generated.py --check
           cargo +1.97.1 generate-lockfile --manifest-path packages/rust/Cargo.toml
 
-          cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all --check
-          dart format --output=none --set-exit-if-changed packages/dart/lib packages/dart/test
-          (
-            cd packages/gleam
-            gleam format --check src test
-          )
-          python3 scripts/regenerate-generated.py --check
+      - name: Validate the reconciled Rust workspace
+        if: steps.repair-state.outputs.needed == 'true'
+        shell: bash
+        working-directory: mcp-rust-libs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          set -euo pipefail
+          cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all -- --check
+          cargo +1.97.1 test --locked --manifest-path packages/rust/Cargo.toml --workspace --all-targets
+          cargo +1.97.1 test --locked --manifest-path packages/rust/Cargo.toml --workspace --no-default-features
+          cargo +1.97.1 check --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --all-targets
+          cargo +1.97.1 clippy --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --all-targets -- -D warnings
+          cargo +1.97.1 doc --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --no-deps
 
-          cat > reports/native-repair-complete.txt <<'EOF'
-          Native repair toolchains:
-          - Rust 1.97.1 with rustfmt
+      - name: Validate the reconciled Dart package
+        if: steps.repair-state.outputs.needed == 'true'
+        shell: bash
+        working-directory: mcp-rust-libs/packages/dart
+        run: |
+          set -euo pipefail
+          dart pub get
+          dart format --output=none --set-exit-if-changed lib test
+          dart analyze
+          dart test
+          dart pub publish --dry-run
+
+      - name: Validate the reconciled Gleam package
+        if: steps.repair-state.outputs.needed == 'true'
+        shell: bash
+        working-directory: mcp-rust-libs/packages/gleam
+        run: |
+          set -euo pipefail
+          gleam deps download
+          gleam format --check src test
+          gleam check
+          gleam test
+
+      - name: Validate repository-wide contracts and provenance
+        if: steps.repair-state.outputs.needed == 'true'
+        shell: bash
+        working-directory: mcp-rust-libs
+        run: |
+          set -euo pipefail
+          make check
+          sh scripts/verify-zed-package.sh "$GITHUB_WORKSPACE/mcp-rust-libs"
+          cat > reports/polyglot-api-repair-complete.txt <<'EOF'
+          Polyglot API repair toolchains:
+          - Rust 1.97.1 with clippy and rustfmt
           - Dart 3.12.2
           - Gleam 1.17.0 on OTP 29.0.1
 
-          Generated Rust, Dart, and Gleam sources were formatted with their
-          pinned native tools, synchronized back to generator templates, and
-          checked for deterministic regeneration drift. The Gleam control and
-          character-class predicates were translated to valid equivalent syntax
-          without changing the canonical contract policy.
+          Repairs preserve the canonical schema and fixture behavior while:
+          - importing Gleam Option constructors and using the built-in UtfCodepoint type;
+          - separating generated-code documentation policy from handwritten Rust exports;
+          - marking the consuming Rust envelope builder as must-use;
+          - carrying both repository licenses and a changelog into the Dart package; and
+          - keeping carrier and target cargo-deny invocations consistent.
           EOF
           python3 scripts/update-source-manifest.py --write
           python3 scripts/update-source-manifest.py --check
 
-      - name: Commit the exact native repair
+      - name: Commit the exact semantic repair
         if: steps.repair-state.outputs.needed == 'true'
         shell: bash
         run: |
@@ -200,8 +279,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A mcp-rust-libs
           if git diff --cached --quiet; then
-            echo "native formatting already matched the pinned toolchains"
+            echo "polyglot APIs already matched the reviewed contract"
             exit 0
           fi
-          git commit -m "style: apply pinned polyglot MCP formatters"
+          git commit -m "fix: reconcile polyglot MCP APIs and package metadata"
           git push origin HEAD:incubator/mcp-rust-libs

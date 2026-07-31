@@ -1,0 +1,217 @@
+name: Publish canonical Rust repositories rerun
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/publish-canonical-rust-repositories-rerun.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: canonical-rust-repository-publication-rerun
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out control repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out reviewed MCP workspace carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: a6de8da34fe183359148961904dd4b9c00a5994e
+          path: mcp-carrier
+          persist-credentials: false
+
+      - name: Check out reviewed Meta Agent carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: f1d3fb515f1ad9c1876afff07ceadb9d21030cc5
+          path: meta-carrier
+          persist-credentials: false
+
+      - name: Authorize owner and publish all remaining canonical repositories
+        shell: bash
+        env:
+          COMMENT_TOKEN: ${{ github.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/canonical-rust-rerun-gh-config
+        run: |
+          set -Eeuo pipefail
+          readonly EXPECTED_LOGIN='ORESoftware'
+          readonly FTNL_SOURCE_SHA='9ec3a9707f8fbfb1a3ba556745b9b9d8306cf3f9'
+          work_root="$RUNNER_TEMP/canonical-rust-rerun"
+          auth_log="$RUNNER_TEMP/canonical-rust-rerun-auth.log"
+          auth_pid=''
+          code_context='canonical-rust-rerun/gh-device-auth'
+
+          publish_status() {
+            local state="$1" description="$2" context="${3:-canonical-rust-rerun/publication}"
+            GH_TOKEN="$COMMENT_TOKEN" gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+              -f state="$state" -f context="$context" -f description="$description" \
+              -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null || true
+          }
+          cleanup() {
+            if [[ -n "$auth_pid" ]] && kill -0 "$auth_pid" 2>/dev/null; then
+              kill "$auth_pid" 2>/dev/null || true
+              wait "$auth_pid" 2>/dev/null || true
+            fi
+            rm -f "$auth_log" "$RUNNER_TEMP/canonical-rust-rerun-askpass"
+            rm -rf "$GH_CONFIG_DIR" "$work_root"
+          }
+          trap cleanup EXIT
+          trap 'publish_status failure "Canonical repository publication failed" "$code_context"' ERR
+          mkdir -p "$GH_CONFIG_DIR" "$work_root"
+
+          : >"$auth_log"
+          (
+            env -u GH_TOKEN -u GITHUB_TOKEN GH_PROMPT_DISABLED=1 NO_COLOR=1 BROWSER=/bin/false \
+              gh auth login --hostname github.com --git-protocol https --web \
+                --scopes repo,read:org,workflow --insecure-storage
+          ) >"$auth_log" 2>&1 &
+          auth_pid=$!
+          code=''
+          for _ in $(seq 1 30); do
+            code="$(tr -d '\r' <"$auth_log" | grep -Eo '[A-Z0-9]{4}-[A-Z0-9]{4}' | head -n1 || true)"
+            [[ -n "$code" ]] && break
+            kill -0 "$auth_pid" 2>/dev/null || break
+            sleep 1
+          done
+          [[ -n "$code" ]] || { echo '::error::No GitHub device code emitted'; exit 1; }
+          code_context="canonical-rust-rerun/gh-device-auth/$code"
+          publish_status pending "Authorize at GitHub's device page" "$code_context"
+          echo "::notice::Authorization code is available in commit status $code_context"
+          set +e
+          wait "$auth_pid"
+          auth_rc=$?
+          set -e
+          auth_pid=''
+          [[ "$auth_rc" -eq 0 ]] || exit "$auth_rc"
+
+          actual_login="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api user --jq .login)"
+          [[ "$actual_login" == "$EXPECTED_LOGIN" ]]
+          for org in meta-agents-demo file-tunnel; do
+            membership="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api "user/memberships/orgs/$org" --jq '.role + ":" + .state')"
+            [[ "$membership" == 'admin:active' ]] || { echo "::error::$org membership is $membership"; exit 1; }
+          done
+          publish_status success 'Owner authorization accepted' "$code_context"
+
+          prepare_snapshot() {
+            local source="$1" destination="$2" date="$3" message="$4"
+            shift 4
+            mkdir -p "$destination"
+            cp -a "$source"/. "$destination"/
+            rm -rf "$destination/.git"
+            for path in "$@"; do rm -rf "$destination/$path"; done
+            git -C "$destination" init -b main >/dev/null
+            git -C "$destination" config user.name 'ORESoftware publication automation'
+            git -C "$destination" config user.email 'bot@oresoftware.dev'
+            git -C "$destination" add -A
+            GIT_AUTHOR_DATE="$date" GIT_COMMITTER_DATE="$date" git -C "$destination" commit -m "$message" >/dev/null
+          }
+
+          prepare_snapshot mcp-carrier/mcp-rust-libs "$work_root/mcp-rust-libs" \
+            '2026-07-31T00:00:00Z' 'feat: publish canonical repository source'
+          prepare_snapshot meta-carrier "$work_root/meta-agent-control-plane" \
+            '2026-07-31T00:00:00Z' 'feat: publish canonical repository source' \
+            '.github/workflows/materialize-meta-agent.yml'
+          test -f "$work_root/mcp-rust-libs/Cargo.toml"
+          test -f "$work_root/meta-agent-control-plane/src/main.rs"
+
+          git clone --filter=blob:none --no-checkout https://github.com/file-tunnel/ftnl-monorepo.git "$work_root/ftnl-source" >/dev/null
+          git -C "$work_root/ftnl-source" checkout --detach "$FTNL_SOURCE_SHA" >/dev/null
+          mkdir -p "$work_root/ftnl-mcp-server/.github/workflows"
+          cp -a "$work_root/ftnl-source/apps/mcp-server/." "$work_root/ftnl-mcp-server/"
+          python3 - "$work_root/ftnl-source/.github/workflows/ftnl-mcp-server.yml" "$work_root/ftnl-mcp-server/.github/workflows/ci.yml" <<'PY'
+          from pathlib import Path
+          import sys
+          text = Path(sys.argv[1]).read_text(encoding='utf-8')
+          text = text.replace("'apps/mcp-server/**'", "'**'")
+          text = text.replace("'.github/workflows/ftnl-mcp-server.yml'", "'.github/workflows/ci.yml'")
+          text = text.replace('--manifest-path apps/mcp-server/Cargo.toml ', '')
+          text = text.replace('--manifest-path apps/mcp-server/Cargo.toml', '')
+          Path(sys.argv[2]).write_text(text, encoding='utf-8')
+          PY
+          python3 - "$work_root/ftnl-mcp-server/README.md" <<'PY'
+          from pathlib import Path
+          import sys
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              "This is the canonical implementation incubator for `file-tunnel/ftnl-mcp-server.rs` while the standalone repository is not yet available through the connected repository-creation surface. The code is kept in the File Tunnel organization—not in a ZIP—and is ready to split into the dedicated repository without changing its package boundary.\n",
+              "This is the canonical standalone implementation for `file-tunnel/ftnl-mcp-server.rs`, extracted from the reviewed `ftnl-monorepo` MCP crate at commit `9ec3a9707f8fbfb1a3ba556745b9b9d8306cf3f9`.\n",
+          )
+          marker = '## Next extraction step\n'
+          if marker in text: text = text.split(marker, 1)[0].rstrip() + '\n'
+          path.write_text(text, encoding='utf-8')
+          PY
+          git -C "$work_root/ftnl-mcp-server" init -b main >/dev/null
+          git -C "$work_root/ftnl-mcp-server" config user.name 'ORESoftware publication automation'
+          git -C "$work_root/ftnl-mcp-server" config user.email 'bot@oresoftware.dev'
+          git -C "$work_root/ftnl-mcp-server" add -A
+          GIT_AUTHOR_DATE='2026-07-31T06:45:00Z' GIT_COMMITTER_DATE='2026-07-31T06:45:00Z' \
+            git -C "$work_root/ftnl-mcp-server" commit -m 'feat: publish standalone File Tunnel MCP server' >/dev/null
+
+          token="$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token)"
+          echo "::add-mask::$token"
+          export REPOSITORY_ADMIN_TOKEN="$token" GIT_TERMINAL_PROMPT=0
+          cat >"$RUNNER_TEMP/canonical-rust-rerun-askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *) printf '%s\n' "$REPOSITORY_ADMIN_TOKEN" ;;
+          esac
+          SH
+          chmod 700 "$RUNNER_TEMP/canonical-rust-rerun-askpass"
+          export GIT_ASKPASS="$RUNNER_TEMP/canonical-rust-rerun-askpass"
+
+          ensure_user_repo() {
+            local name="$1" description="$2"
+            env -u GH_TOKEN -u GITHUB_TOKEN gh api "repos/ORESoftware/$name" >/dev/null 2>&1 || \
+              env -u GH_TOKEN -u GITHUB_TOKEN gh api --method POST user/repos \
+                -f name="$name" -f description="$description" -F private=false \
+                -F has_issues=true -F has_projects=false -F has_wiki=false >/dev/null
+          }
+          ensure_org_repo() {
+            local org="$1" name="$2" description="$3"
+            env -u GH_TOKEN -u GITHUB_TOKEN gh api "repos/$org/$name" >/dev/null 2>&1 || \
+              env -u GH_TOKEN -u GITHUB_TOKEN gh api --method POST "orgs/$org/repos" \
+                -f name="$name" -f description="$description" -F private=false \
+                -F has_issues=true -F has_projects=false -F has_wiki=false >/dev/null
+          }
+          push_exact_main() {
+            local directory="$1" full_name="$2"
+            local expected existing actual
+            expected="$(git -C "$directory" rev-parse HEAD)"
+            existing="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api "repos/$full_name/git/ref/heads/main" --jq .object.sha 2>/dev/null || true)"
+            if [[ -n "$existing" ]]; then
+              [[ "$existing" == "$expected" ]] || { echo "::error::Refusing to overwrite $full_name/main"; exit 1; }
+            else
+              git -C "$directory" remote add origin "https://github.com/$full_name.git"
+              git -C "$directory" push origin HEAD:refs/heads/main
+            fi
+            env -u GH_TOKEN -u GITHUB_TOKEN gh api --method PATCH "repos/$full_name" -f default_branch=main >/dev/null
+            actual="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api "repos/$full_name/git/ref/heads/main" --jq .object.sha)"
+            [[ "$actual" == "$expected" ]]
+            printf '%s %s\n' "$full_name" "$actual"
+          }
+
+          publish_status pending 'Creating and verifying three repositories'
+          ensure_user_repo mcp-rust-libs 'Shared Rust and polyglot MCP runtime, contracts, safety, telemetry, and testkit libraries'
+          ensure_org_repo meta-agents-demo meta-agent-control-plane.rs 'Single-binary Rust meta-agent daemon and Leptos observability UI'
+          ensure_org_repo file-tunnel ftnl-mcp-server.rs 'Fail-closed Rust MCP server for File Tunnel inspection, planning, and validation'
+          push_exact_main "$work_root/mcp-rust-libs" ORESoftware/mcp-rust-libs
+          push_exact_main "$work_root/meta-agent-control-plane" meta-agents-demo/meta-agent-control-plane.rs
+          push_exact_main "$work_root/ftnl-mcp-server" file-tunnel/ftnl-mcp-server.rs
+
+          trap - ERR
+          publish_status success 'Created and verified all three canonical repositories'

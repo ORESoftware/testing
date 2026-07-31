@@ -1,0 +1,149 @@
+name: repair mcp-rust-libs native formatting
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/mcp-rust-libs-repair.yml
+      - .github/workflows/mcp-rust-libs-incubator.yml
+      - mcp-rust-libs/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mcp-rust-libs-repair-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'incubator/mcp-rust-libs')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out the carrier branch
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: incubator/mcp-rust-libs
+          persist-credentials: true
+          fetch-depth: 0
+
+      - name: Install Rust formatter
+        shell: bash
+        run: rustup toolchain install "1.97.1" --profile minimal --component rustfmt
+
+      - name: Install Dart
+        uses: dart-lang/setup-dart@f0eb0a59eeb1a5db3bc0a78fca591efd9b8fd321 # v1.7.1
+        with:
+          sdk: "3.12.2"
+
+      - name: Install Gleam
+        uses: erlef/setup-beam@b480fb7f5bf3964a6fdd59e61adf2098fe059f65 # v1.20.4
+        with:
+          otp-version: "28.4"
+          gleam-version: "1.17.1"
+          rebar3-version: "3"
+
+      - name: Repair semantics, generated templates, native formatting, and lockfile
+        shell: bash
+        working-directory: mcp-rust-libs
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          template = Path("tooling/schema-codegen/templates/result-envelope.gleam.in")
+          text = template.read_text(encoding="utf-8")
+          old = """    !(value >= 0 && value <= 8)
+              && !(value >= 11 && value <= 12)
+              && !(value >= 14 && value <= 31)
+              && value != 127
+          """
+          new = """    (value >= 0 && value <= 8)
+              || (value >= 11 && value <= 12)
+              || (value >= 14 && value <= 31)
+              || value == 127
+          """
+          if old in text:
+              template.write_text(text.replace(old, new, 1), encoding="utf-8")
+          elif new not in text:
+              raise SystemExit("Gleam forbidden-control predicate did not match either expected form")
+
+          workflow = Path("../.github/workflows/mcp-rust-libs-incubator.yml")
+          workflow_text = workflow.read_text(encoding="utf-8")
+          bad = "run: cargo deny --config ../../deny.toml check"
+          good = "run: cargo deny check --config ../../deny.toml"
+          if bad in workflow_text:
+              workflow.write_text(workflow_text.replace(bad, good, 1), encoding="utf-8")
+          elif good not in workflow_text:
+              raise SystemExit("cargo-deny invocation did not match either expected form")
+          PY
+
+          python3 scripts/regenerate-generated.py --write
+
+          cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all
+          dart format packages/dart/lib packages/dart/test
+          (
+            cd packages/gleam
+            gleam format src test
+          )
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path(".")
+          lock = json.loads((root / "contracts/schema-lock.json").read_text(encoding="utf-8"))
+          schema = lock["schemas"][0]
+          replacements = (
+              (lock["generator"]["version"], "{{GENERATOR_VERSION}}"),
+              (schema["id"], "{{SCHEMA_ID}}"),
+              (schema["sha256"], "{{SCHEMA_SHA256}}"),
+          )
+          mapping = json.loads(
+              (root / "tooling/schema-codegen/generator-map.json").read_text(encoding="utf-8")
+          )
+          formatted_suffixes = {".rs", ".dart", ".gleam"}
+          for item in mapping["outputs"]:
+              output = root / item["output"]
+              if output.suffix not in formatted_suffixes:
+                  continue
+              text = output.read_text(encoding="utf-8")
+              for actual, placeholder in replacements:
+                  if actual not in text:
+                      raise SystemExit(f"missing generated header value {actual!r} in {output}")
+                  text = text.replace(actual, placeholder, 1)
+              (root / item["template"]).write_text(text, encoding="utf-8")
+          PY
+
+          python3 scripts/regenerate-generated.py --check
+          cargo +1.97.1 generate-lockfile --manifest-path packages/rust/Cargo.toml
+          python3 scripts/update-source-manifest.py
+
+          cargo +1.97.1 fmt --manifest-path packages/rust/Cargo.toml --all --check
+          dart format --output=none --set-exit-if-changed packages/dart/lib packages/dart/test
+          (
+            cd packages/gleam
+            gleam format --check src test
+          )
+          python3 scripts/regenerate-generated.py --check
+          python3 scripts/update-source-manifest.py --check
+
+      - name: Commit the reviewed repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/mcp-rust-libs-incubator.yml mcp-rust-libs
+          if git diff --cached --quiet; then
+            echo "No native repair changes remain."
+            exit 0
+          fi
+          git commit -m "fix: reconcile native formatting and generated templates"
+          echo "repair_commit=$(git rev-parse HEAD)"
+          git push origin HEAD:incubator/mcp-rust-libs

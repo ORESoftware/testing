@@ -1,0 +1,58 @@
+name: Materialize Meta-Agent Control Plane
+
+on:
+  push:
+    branches:
+      - incubator/meta-agent-control-plane
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out bootstrap branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: true
+
+      - name: Reconstruct and verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/chunk-* > /tmp/source.b64
+          base64 -d /tmp/source.b64 > /tmp/source.tar.gz
+          printf '%s  %s\n' \
+            '3be3436c7a2b01ab85a68f6de8bd7ec11fed1d8631b0157c315e8362ee21dc63' \
+            /tmp/source.tar.gz | sha256sum -c -
+          mkdir /tmp/source
+          python3 - <<'PY'
+          import pathlib
+          import tarfile
+
+          archive = pathlib.Path('/tmp/source.tar.gz')
+          root = pathlib.Path('/tmp/source').resolve()
+          with tarfile.open(archive, 'r:gz') as tar:
+              for member in tar.getmembers():
+                  target = (root / member.name).resolve()
+                  if target != root and root not in target.parents:
+                      raise SystemExit(f'unsafe path: {member.name}')
+                  if member.issym() or member.islnk():
+                      raise SystemExit(f'links forbidden: {member.name}')
+              tar.extractall(root)
+          PY
+
+      - name: Replace bootstrap tree with source
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a /tmp/source/. .
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat: publish meta-agent control plane source'
+          git push origin HEAD:incubator/meta-agent-control-plane

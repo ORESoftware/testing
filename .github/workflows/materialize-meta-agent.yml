@@ -1,12 +1,6 @@
 name: Publish Meta-Agent Control Plane to canonical organization
 
 on:
-  push:
-    branches:
-      - incubator/meta-agent-control-plane
-  pull_request:
-    branches:
-      - master
   workflow_dispatch:
 
 permissions:
@@ -14,7 +8,6 @@ permissions:
 
 jobs:
   publish:
-    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

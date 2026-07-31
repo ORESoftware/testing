@@ -1,0 +1,26 @@
+[package]
+org = "ORESoftware"
+name = "mcp-rust-libs"
+version = "0.1.0"
+description = "Shared bounded, observable, and testable Rust infrastructure for MCP servers"
+license = "MIT OR Apache-2.0"
+keywords = ["mcp", "rust", "telemetry", "testing", "security"]
+
+[package.repository]
+vcs = "git"
+url = "https://github.com/ORESoftware/mcp-rust-libs"
+
+[publish]
+include_readme = true
+tag_format = "v{version}"
+smoke_test = "sh \"$ZED_PKG_TEST_TARGET/scripts/verify-zed-package.sh\" \"$ZED_PKG_TEST_TARGET\""
+exclude = [
+  ".git/**",
+  "target/**",
+]
+
+[install]
+adapter = "none"
+
+[scripts]
+test = "cargo test --locked --workspace --all-features"

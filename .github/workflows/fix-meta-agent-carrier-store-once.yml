@@ -1,0 +1,137 @@
+name: Fix and validate Meta-Agent carrier Clippy findings once
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/fix-meta-agent-carrier-store-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-meta-agent-carrier-store-den-1057
+  cancel-in-progress: false
+
+jobs:
+  fix-validate-and-push:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the exact carrier branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: incubator/meta-agent-control-plane
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Require the diagnosed carrier revision
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = f1d3fb515f1ad9c1876afff07ceadb9d21030cc5
+
+      - name: Collapse only the three behavior-equivalent nested guards
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/store.rs")
+          text = path.read_text(encoding="utf-8")
+          replacements = [
+              (
+                  """            if applied {
+                          if let Some(agent) = inner.agents.get_mut(&agent_id) {
+                              remove_completion_counter(agent, previous_outcome);
+                              agent.status = AgentStatus::Running;
+                              agent.active_task_id = Some(started.task_id.clone());
+                          }
+                      }
+          """,
+                  """            if applied
+                          && let Some(agent) = inner.agents.get_mut(&agent_id)
+                      {
+                          remove_completion_counter(agent, previous_outcome);
+                          agent.status = AgentStatus::Running;
+                          agent.active_task_id = Some(started.task_id.clone());
+                      }
+          """,
+              ),
+              (
+                  """            if applied {
+                          if let Some(agent) = inner.agents.get_mut(&agent_id) {
+                              remove_completion_counter(agent, previous_outcome);
+                              agent.status = if progress.blocker.is_some() {
+                                  AgentStatus::Blocked
+                              } else {
+                                  AgentStatus::Running
+                              };
+                              agent.active_task_id = Some(progress.task_id.clone());
+                          }
+                      }
+          """,
+                  """            if applied
+                          && let Some(agent) = inner.agents.get_mut(&agent_id)
+                      {
+                          remove_completion_counter(agent, previous_outcome);
+                          agent.status = if progress.blocker.is_some() {
+                              AgentStatus::Blocked
+                          } else {
+                              AgentStatus::Running
+                          };
+                          agent.active_task_id = Some(progress.task_id.clone());
+                      }
+          """,
+              ),
+              (
+                  """            if applied {
+                          if let Some(agent) = inner.agents.get_mut(&agent_id) {
+                              agent.active_task_id = None;
+                              reconcile_completion_counters(agent, previous_outcome, completed.outcome);
+                          }
+                      }
+          """,
+                  """            if applied
+                          && let Some(agent) = inner.agents.get_mut(&agent_id)
+                      {
+                          agent.active_task_id = None;
+                          reconcile_completion_counters(agent, previous_outcome, completed.outcome);
+                      }
+          """,
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one exact replacement, found {count}")
+              text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+
+      - name: Format and validate the complete carrier
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cargo +1.97.1 fmt --all
+          cargo +1.97.1 generate-lockfile
+          cargo +1.97.1 clippy --locked --all-targets --all-features -- -D warnings
+          cargo +1.97.1 test --locked --all-targets --all-features
+          python3 scripts/verify_contract.py
+          node --check scripts/dashboard.js
+          rm -f Cargo.lock
+          git diff --check
+          test "$(git status --short)" = ' M src/store.rs'
+
+      - name: Commit and push the validated carrier fix
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/store.rs
+          git commit -m 'fix(store): satisfy Rust 1.97 Clippy without changing reducer behavior'
+          git push origin HEAD:refs/heads/incubator/meta-agent-control-plane

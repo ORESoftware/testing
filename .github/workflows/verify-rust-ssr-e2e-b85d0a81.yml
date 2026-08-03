@@ -18,7 +18,7 @@ jobs:
       github.actor == 'ORESoftware' &&
       github.event.pull_request.head.repo.full_name == 'ORESoftware/testing' &&
       github.head_ref == 'agent/verify-rust-ssr-e2e-b85d0a81'
-    runs-on: self-hosted
+    runs-on: sonus-ci
     timeout-minutes: 25
     steps:
       - name: Clone, isolate, and validate the exact private head
@@ -31,6 +31,10 @@ jobs:
 
           test "$GITHUB_ACTOR" = 'ORESoftware'
           test "$GITHUB_HEAD_REF" = 'agent/verify-rust-ssr-e2e-b85d0a81'
+          test "$RUNNER_OS" = 'Linux'
+          test "$(id -u)" != 0
+          test ! -e /var/run/docker.sock
+          test ! -e /var/run/secrets/kubernetes.io/serviceaccount/token
           command -v bash >/dev/null
           command -v git >/dev/null
           command -v node >/dev/null

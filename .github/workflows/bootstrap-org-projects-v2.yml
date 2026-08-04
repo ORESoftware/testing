@@ -1,0 +1,32 @@
+name: Bootstrap organization Projects v2
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/bootstrap-org-projects-v2.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bootstrap-organization-projects-v2-testing
+  cancel-in-progress: true
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure organization projects exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BOOTSTRAP_REPOSITORY: ORESoftware/testing
+          BOOTSTRAP_BRANCH: master
+          BOOTSTRAP_NONCE: d3badcc5b3914b5328a30c193e66f21f
+          BOOTSTRAP_PUBLIC_KEY_PATH: .github/tmp/org-project-bootstrap-d3badcc5b3914b5328a30c193e66f21f.pub.pem
+          BOOTSTRAP_CIPHERTEXT_PATH: .github/tmp/org-project-bootstrap-d3badcc5b3914b5328a30c193e66f21f.enc.b64
+          BOOTSTRAP_RESULT_PATH: .github/tmp/org-project-bootstrap-d3badcc5b3914b5328a30c193e66f21f.result.json
+        run: python3 .github/scripts/bootstrap_org_projects.py

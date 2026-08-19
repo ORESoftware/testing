@@ -1,6 +1,11 @@
 name: Export exact Opto-Sync audit sources
 
 on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .github/workflows/export-opto-sync-audit-sources.yml
   push:
     branches:
       - audit/opto-sync-source-export-20260819

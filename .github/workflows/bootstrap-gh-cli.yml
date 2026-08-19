@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - bootstrap/gh-cli-v2.97.0-20260818
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: read

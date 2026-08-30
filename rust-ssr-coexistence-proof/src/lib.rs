@@ -75,7 +75,7 @@ async fn maud_page() -> Html<String> {
 }
 
 async fn leptos_page() -> Html<String> {
-    let owner = Owner::new();
+    let owner = leptos::prelude::Owner::new();
     Html(owner.with(|| {
         view! {
             <main data-renderer="leptos">

@@ -1,0 +1,183 @@
+{
+  "fixtures": {
+    "invalid/result-envelope/bad-error-code.json": {
+      "accepted": false,
+      "error_code": "pattern",
+      "error_path": "$/error/code"
+    },
+    "invalid/result-envelope/code-empty.json": {
+      "accepted": false,
+      "error_code": "min_length",
+      "error_path": "$/error/code"
+    },
+    "invalid/result-envelope/code-long.json": {
+      "accepted": false,
+      "error_code": "max_length",
+      "error_path": "$/error/code"
+    },
+    "invalid/result-envelope/forbidden-control.json": {
+      "accepted": false,
+      "error_code": "pattern",
+      "error_path": "$/error/message"
+    },
+    "invalid/result-envelope/invalid-ok-const.json": {
+      "accepted": false,
+      "error_code": "const",
+      "error_path": "$/ok"
+    },
+    "invalid/result-envelope/message-empty.json": {
+      "accepted": false,
+      "error_code": "min_length",
+      "error_path": "$/error/message"
+    },
+    "invalid/result-envelope/missing-code.json": {
+      "accepted": false,
+      "error_code": "required",
+      "error_path": "$/error/code"
+    },
+    "invalid/result-envelope/missing-data.json": {
+      "accepted": false,
+      "error_code": "required",
+      "error_path": "$/data"
+    },
+    "invalid/result-envelope/missing-error.json": {
+      "accepted": false,
+      "error_code": "required",
+      "error_path": "$/error"
+    },
+    "invalid/result-envelope/missing-ok.json": {
+      "accepted": false,
+      "error_code": "required",
+      "error_path": "$/ok"
+    },
+    "invalid/result-envelope/mixed-branches.json": {
+      "accepted": false,
+      "error_code": "additional_properties",
+      "error_path": "$/data"
+    },
+    "invalid/result-envelope/null-meta.json": {
+      "accepted": false,
+      "error_code": "type",
+      "error_path": "$/meta"
+    },
+    "invalid/result-envelope/null-request-id.json": {
+      "accepted": false,
+      "error_code": "type",
+      "error_path": "$/meta/request_id"
+    },
+    "invalid/result-envelope/null-truncated.json": {
+      "accepted": false,
+      "error_code": "type",
+      "error_path": "$/meta/truncated"
+    },
+    "invalid/result-envelope/omitted-float.json": {
+      "accepted": false,
+      "error_code": "type",
+      "error_path": "$/meta/omitted_bytes"
+    },
+    "invalid/result-envelope/omitted-negative.json": {
+      "accepted": false,
+      "error_code": "minimum",
+      "error_path": "$/meta/omitted_bytes"
+    },
+    "invalid/result-envelope/omitted-too-large.json": {
+      "accepted": false,
+      "error_code": "maximum",
+      "error_path": "$/meta/omitted_bytes"
+    },
+    "invalid/result-envelope/path-component-empty.json": {
+      "accepted": false,
+      "error_code": "min_length",
+      "error_path": "$/error/path/0"
+    },
+    "invalid/result-envelope/path-component-long.json": {
+      "accepted": false,
+      "error_code": "max_length",
+      "error_path": "$/error/path/0"
+    },
+    "invalid/result-envelope/path-component-type.json": {
+      "accepted": false,
+      "error_code": "type",
+      "error_path": "$/error/path/0"
+    },
+    "invalid/result-envelope/path-too-many.json": {
+      "accepted": false,
+      "error_code": "max_items",
+      "error_path": "$/error/path"
+    },
+    "invalid/result-envelope/path-type.json": {
+      "accepted": false,
+      "error_code": "type",
+      "error_path": "$/error/path"
+    },
+    "invalid/result-envelope/request-id-empty.json": {
+      "accepted": false,
+      "error_code": "min_length",
+      "error_path": "$/meta/request_id"
+    },
+    "invalid/result-envelope/request-id-long.json": {
+      "accepted": false,
+      "error_code": "max_length",
+      "error_path": "$/meta/request_id"
+    },
+    "invalid/result-envelope/request-id-pattern.json": {
+      "accepted": false,
+      "error_code": "pattern",
+      "error_path": "$/meta/request_id"
+    },
+    "invalid/result-envelope/retryable-type.json": {
+      "accepted": false,
+      "error_code": "type",
+      "error_path": "$/error/retryable"
+    },
+    "invalid/result-envelope/root-not-object.json": {
+      "accepted": false,
+      "error_code": "type",
+      "error_path": "$"
+    },
+    "invalid/result-envelope/unbounded-message.json": {
+      "accepted": false,
+      "error_code": "max_length",
+      "error_path": "$/error/message"
+    },
+    "invalid/result-envelope/unicode-codepoint-overflow.json": {
+      "accepted": false,
+      "error_code": "max_length",
+      "error_path": "$/error/message"
+    },
+    "invalid/result-envelope/unknown-error-field.json": {
+      "accepted": false,
+      "error_code": "additional_properties",
+      "error_path": "$/error/stack"
+    },
+    "invalid/result-envelope/unknown-field.json": {
+      "accepted": false,
+      "error_code": "additional_properties",
+      "error_path": "$/debug_token"
+    },
+    "invalid/result-envelope/unknown-meta-field.json": {
+      "accepted": false,
+      "error_code": "additional_properties",
+      "error_path": "$/meta/trace_token"
+    },
+    "valid/result-envelope/c1-control-allowed.json": {
+      "accepted": true
+    },
+    "valid/result-envelope/failure-with-path.json": {
+      "accepted": true
+    },
+    "valid/result-envelope/failure.json": {
+      "accepted": true
+    },
+    "valid/result-envelope/success-with-metadata.json": {
+      "accepted": true
+    },
+    "valid/result-envelope/success.json": {
+      "accepted": true
+    },
+    "valid/result-envelope/unicode-codepoint-boundary.json": {
+      "accepted": true
+    }
+  },
+  "format": "ore-mcp-fixture-expectations/v1"
+}

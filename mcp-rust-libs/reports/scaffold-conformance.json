@@ -1,0 +1,393 @@
+{
+  "failures": [],
+  "fixtures": [
+    {
+      "accepted": true,
+      "canonical_sha256": "badedeb75f40321d26b4fd5e7a1696961b92f89c69b9bff200191194e17b21f5",
+      "error_code": null,
+      "error_path": null,
+      "expected_accept": true,
+      "expected_error_code": null,
+      "expected_error_path": null,
+      "fixture": "valid/result-envelope/c1-control-allowed.json"
+    },
+    {
+      "accepted": true,
+      "canonical_sha256": "51aace9035b036e76add820c90bc3d7f0edad0049f85a55ea9dbb189b1a87750",
+      "error_code": null,
+      "error_path": null,
+      "expected_accept": true,
+      "expected_error_code": null,
+      "expected_error_path": null,
+      "fixture": "valid/result-envelope/failure-with-path.json"
+    },
+    {
+      "accepted": true,
+      "canonical_sha256": "59729ec6cffa6f16f7c78de65d58c26b63272669b9b90afd970a2c1982f4c969",
+      "error_code": null,
+      "error_path": null,
+      "expected_accept": true,
+      "expected_error_code": null,
+      "expected_error_path": null,
+      "fixture": "valid/result-envelope/failure.json"
+    },
+    {
+      "accepted": true,
+      "canonical_sha256": "70ffb53984bbe1f1e7a1445e2ee581a31d267639e09ae3f050a84274ae311fc2",
+      "error_code": null,
+      "error_path": null,
+      "expected_accept": true,
+      "expected_error_code": null,
+      "expected_error_path": null,
+      "fixture": "valid/result-envelope/success-with-metadata.json"
+    },
+    {
+      "accepted": true,
+      "canonical_sha256": "3fb2df7fb73f5f5ee962aa2b34a612c1d7716b2550b736163d3f24c1bb3d1ef5",
+      "error_code": null,
+      "error_path": null,
+      "expected_accept": true,
+      "expected_error_code": null,
+      "expected_error_path": null,
+      "fixture": "valid/result-envelope/success.json"
+    },
+    {
+      "accepted": true,
+      "canonical_sha256": "4171f6392c0f100abce01ebc9f906e9310a6884915e3d1c5113c2044fafb0adc",
+      "error_code": null,
+      "error_path": null,
+      "expected_accept": true,
+      "expected_error_code": null,
+      "expected_error_path": null,
+      "fixture": "valid/result-envelope/unicode-codepoint-boundary.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "0520df6106b79b277915d1033a65d5751554e5dcbe45cebb78c4b435e52d25dc",
+      "error_code": "pattern",
+      "error_path": "$/error/code",
+      "expected_accept": false,
+      "expected_error_code": "pattern",
+      "expected_error_path": "$/error/code",
+      "fixture": "invalid/result-envelope/bad-error-code.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "1aa05a612ba1dab82f8b5c3369e68a4aaf7157ac895ad400cbad77201e0c7a75",
+      "error_code": "min_length",
+      "error_path": "$/error/code",
+      "expected_accept": false,
+      "expected_error_code": "min_length",
+      "expected_error_path": "$/error/code",
+      "fixture": "invalid/result-envelope/code-empty.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "12e98cc6eb3b18692eca6f96a153c734024f7450a46eeef2fbec1b9653f6ad87",
+      "error_code": "max_length",
+      "error_path": "$/error/code",
+      "expected_accept": false,
+      "expected_error_code": "max_length",
+      "expected_error_path": "$/error/code",
+      "fixture": "invalid/result-envelope/code-long.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "8efa4c38bb0a367647b510a26c14eb9a0e4a9c6917366ef88702a7b2bd9e4e6a",
+      "error_code": "pattern",
+      "error_path": "$/error/message",
+      "expected_accept": false,
+      "expected_error_code": "pattern",
+      "expected_error_path": "$/error/message",
+      "fixture": "invalid/result-envelope/forbidden-control.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "9f7b4ae096ac98708d104a0f98c9b0748468ce8c24853af49fcd899589a060dd",
+      "error_code": "const",
+      "error_path": "$/ok",
+      "expected_accept": false,
+      "expected_error_code": "const",
+      "expected_error_path": "$/ok",
+      "fixture": "invalid/result-envelope/invalid-ok-const.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "527c24747edeeb561d9b33ebe77ee091bd015121b2fb8848c949f8c92ba01199",
+      "error_code": "min_length",
+      "error_path": "$/error/message",
+      "expected_accept": false,
+      "expected_error_code": "min_length",
+      "expected_error_path": "$/error/message",
+      "fixture": "invalid/result-envelope/message-empty.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "3f5355258450c9ea6315190fcc2f3195b42a76ec4396346f44e3a4d89ed4a442",
+      "error_code": "required",
+      "error_path": "$/error/code",
+      "expected_accept": false,
+      "expected_error_code": "required",
+      "expected_error_path": "$/error/code",
+      "fixture": "invalid/result-envelope/missing-code.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "4062edaf750fb8074e7e83e0c9028c94e32468a8b6f1614774328ef045150f93",
+      "error_code": "required",
+      "error_path": "$/data",
+      "expected_accept": false,
+      "expected_error_code": "required",
+      "expected_error_path": "$/data",
+      "fixture": "invalid/result-envelope/missing-data.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "38667e60226bf99701916900a2a265233dcc014e1206c173ade921d608824b53",
+      "error_code": "required",
+      "error_path": "$/error",
+      "expected_accept": false,
+      "expected_error_code": "required",
+      "expected_error_path": "$/error",
+      "fixture": "invalid/result-envelope/missing-error.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "7fb9d166d1a15bce0b9f085f3818946fd9297e4513a4a034a0ceb749292b4c0d",
+      "error_code": "required",
+      "error_path": "$/ok",
+      "expected_accept": false,
+      "expected_error_code": "required",
+      "expected_error_path": "$/ok",
+      "fixture": "invalid/result-envelope/missing-ok.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "763e6b5b3130b8031aab3ce0e136f244a9c1c3c9481b558a19b9a2bf9aca8c0b",
+      "error_code": "additional_properties",
+      "error_path": "$/data",
+      "expected_accept": false,
+      "expected_error_code": "additional_properties",
+      "expected_error_path": "$/data",
+      "fixture": "invalid/result-envelope/mixed-branches.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "966a9aa93f498525922755204ac143d544f4a88feed2cc097552d54dfd542072",
+      "error_code": "type",
+      "error_path": "$/meta",
+      "expected_accept": false,
+      "expected_error_code": "type",
+      "expected_error_path": "$/meta",
+      "fixture": "invalid/result-envelope/null-meta.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "bf20058aacfae920a77c487ef2790a4c45973288f5017c8fe4b0a06151409785",
+      "error_code": "type",
+      "error_path": "$/meta/request_id",
+      "expected_accept": false,
+      "expected_error_code": "type",
+      "expected_error_path": "$/meta/request_id",
+      "fixture": "invalid/result-envelope/null-request-id.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "b9fad028524bee8065341372e9fec25fb00a38ad89f1b5e69106c9497d589ef5",
+      "error_code": "type",
+      "error_path": "$/meta/truncated",
+      "expected_accept": false,
+      "expected_error_code": "type",
+      "expected_error_path": "$/meta/truncated",
+      "fixture": "invalid/result-envelope/null-truncated.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "cef299e4e80cd1df58a87fce3ff4fcef756ed3aa991a8c046ac8c611d1507c4c",
+      "error_code": "type",
+      "error_path": "$/meta/omitted_bytes",
+      "expected_accept": false,
+      "expected_error_code": "type",
+      "expected_error_path": "$/meta/omitted_bytes",
+      "fixture": "invalid/result-envelope/omitted-float.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "f3be619c7bd6889900ea7c42ab881dc311f66db4258cc1dedde09462668d89f3",
+      "error_code": "minimum",
+      "error_path": "$/meta/omitted_bytes",
+      "expected_accept": false,
+      "expected_error_code": "minimum",
+      "expected_error_path": "$/meta/omitted_bytes",
+      "fixture": "invalid/result-envelope/omitted-negative.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "1ab90a869ac565ed6242b31bee89845ffade9c2ac46ce5f7e64ba00d8268f7a6",
+      "error_code": "maximum",
+      "error_path": "$/meta/omitted_bytes",
+      "expected_accept": false,
+      "expected_error_code": "maximum",
+      "expected_error_path": "$/meta/omitted_bytes",
+      "fixture": "invalid/result-envelope/omitted-too-large.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "5676369b91384a61d77f99ff8f1ecff8cfcc2339eb11785b130c3f38c7c4c61e",
+      "error_code": "min_length",
+      "error_path": "$/error/path/0",
+      "expected_accept": false,
+      "expected_error_code": "min_length",
+      "expected_error_path": "$/error/path/0",
+      "fixture": "invalid/result-envelope/path-component-empty.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "8a5a1090bc15607e5220f590383ca7768d0b2947991904b8820687fff44fa11f",
+      "error_code": "max_length",
+      "error_path": "$/error/path/0",
+      "expected_accept": false,
+      "expected_error_code": "max_length",
+      "expected_error_path": "$/error/path/0",
+      "fixture": "invalid/result-envelope/path-component-long.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "df6a825e26e11be832951d7bf86749008a500efd670ca64399ca39ee90804ded",
+      "error_code": "type",
+      "error_path": "$/error/path/0",
+      "expected_accept": false,
+      "expected_error_code": "type",
+      "expected_error_path": "$/error/path/0",
+      "fixture": "invalid/result-envelope/path-component-type.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "14869c0f752f31f2680cfe15fa1063f231a0210d2298f5af53b8bdc6005c1776",
+      "error_code": "max_items",
+      "error_path": "$/error/path",
+      "expected_accept": false,
+      "expected_error_code": "max_items",
+      "expected_error_path": "$/error/path",
+      "fixture": "invalid/result-envelope/path-too-many.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "6aa42bd95a1d95878bbb639f546f59b7f46ce87c6756d608329180da2337b7dd",
+      "error_code": "type",
+      "error_path": "$/error/path",
+      "expected_accept": false,
+      "expected_error_code": "type",
+      "expected_error_path": "$/error/path",
+      "fixture": "invalid/result-envelope/path-type.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "3e581e72f44b5dccc97f93036aca5f54b41fff21e31cb207d3169e2f05e5c476",
+      "error_code": "min_length",
+      "error_path": "$/meta/request_id",
+      "expected_accept": false,
+      "expected_error_code": "min_length",
+      "expected_error_path": "$/meta/request_id",
+      "fixture": "invalid/result-envelope/request-id-empty.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "0556eb80d1412e00ec308268cba7c696fb1eba27a83a05c5b7253d066f37fd4a",
+      "error_code": "max_length",
+      "error_path": "$/meta/request_id",
+      "expected_accept": false,
+      "expected_error_code": "max_length",
+      "expected_error_path": "$/meta/request_id",
+      "fixture": "invalid/result-envelope/request-id-long.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "35fe9ce8a5e61c210afbf93a52c4365e40857c5d799739cabbd2a1e8269b2110",
+      "error_code": "pattern",
+      "error_path": "$/meta/request_id",
+      "expected_accept": false,
+      "expected_error_code": "pattern",
+      "expected_error_path": "$/meta/request_id",
+      "fixture": "invalid/result-envelope/request-id-pattern.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "be6ba6e7a72cc33e25a4dcc0ab4352563c6e10fc30f381af77cf44d6e3e3c215",
+      "error_code": "type",
+      "error_path": "$/error/retryable",
+      "expected_accept": false,
+      "expected_error_code": "type",
+      "expected_error_path": "$/error/retryable",
+      "fixture": "invalid/result-envelope/retryable-type.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "error_code": "type",
+      "error_path": "$",
+      "expected_accept": false,
+      "expected_error_code": "type",
+      "expected_error_path": "$",
+      "fixture": "invalid/result-envelope/root-not-object.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "453b51b3ca998e5268fc8ff572f68092d175dddd40527f1df63266543cb0d0f3",
+      "error_code": "max_length",
+      "error_path": "$/error/message",
+      "expected_accept": false,
+      "expected_error_code": "max_length",
+      "expected_error_path": "$/error/message",
+      "fixture": "invalid/result-envelope/unbounded-message.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "268243a415deaba10e3c86e587077486173d46ca75d5746adcc8c72682bb79a4",
+      "error_code": "max_length",
+      "error_path": "$/error/message",
+      "expected_accept": false,
+      "expected_error_code": "max_length",
+      "expected_error_path": "$/error/message",
+      "fixture": "invalid/result-envelope/unicode-codepoint-overflow.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "8ba6fe1bff78692f30bc6827ac4c5d330a2b9746b75be96c0fd6a8ab06517649",
+      "error_code": "additional_properties",
+      "error_path": "$/error/stack",
+      "expected_accept": false,
+      "expected_error_code": "additional_properties",
+      "expected_error_path": "$/error/stack",
+      "fixture": "invalid/result-envelope/unknown-error-field.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "59cafd6d5e587930ebe72b32e7350fbfe5fd6e553a09bdc2d29d4e691bf90df6",
+      "error_code": "additional_properties",
+      "error_path": "$/debug_token",
+      "expected_accept": false,
+      "expected_error_code": "additional_properties",
+      "expected_error_path": "$/debug_token",
+      "fixture": "invalid/result-envelope/unknown-field.json"
+    },
+    {
+      "accepted": false,
+      "canonical_sha256": "09380548a8492e39da5ff4a28399349d6dc336038a59ddd934bc4f91e7334b09",
+      "error_code": "additional_properties",
+      "error_path": "$/meta/trace_token",
+      "expected_accept": false,
+      "expected_error_code": "additional_properties",
+      "expected_error_path": "$/meta/trace_token",
+      "fixture": "invalid/result-envelope/unknown-meta-field.json"
+    }
+  ],
+  "format": "ore-mcp-contract-parity/v1",
+  "generator_version": "0.1.0",
+  "native_validation_status": "not-run-in-this-environment",
+  "native_validators_executed": [],
+  "schema_id": "https://schemas.oresoftware.com/mcp/common/v1/result-envelope.schema.json",
+  "schema_sha256": "2f28d646fa7ada0b3d2edd3c5ee19d663543e11117bbb37f4609307c6a9ff61e",
+  "schema_version": "1.0.0",
+  "scope": "scaffold-portable-validator"
+}

@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = [
+  "crates/ore-mcp",
+  "crates/ore-mcp-config",
+  "crates/ore-mcp-contracts",
+  "crates/ore-mcp-http",
+  "crates/ore-mcp-runtime",
+  "crates/ore-mcp-safety",
+  "crates/ore-mcp-telemetry",
+  "crates/ore-mcp-testkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ORESoftware/mcp-rust-libs"
+homepage = "https://github.com/ORESoftware/mcp-rust-libs"
+authors = ["ORESoftware"]
+
+[workspace.dependencies]
+flags2env = { version = "=0.1.0", git = "https://github.com/ORESoftware/flags-2-env.git", rev = "377bff1a4e7424eb98377997a232ddc0fc700f59" }
+opentelemetry = "0.32"
+opentelemetry-otlp = { version = "0.32", default-features = false, features = ["grpc-tonic", "metrics", "trace", "tls-ring", "tls-roots"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+rmcp = { version = "2.2.0", features = ["server", "transport-io"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.150"
+thiserror = "2.0.17"
+tokio = { version = "1.53.0", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1.41"
+tracing-opentelemetry = "0.33"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "json"] }
+url = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

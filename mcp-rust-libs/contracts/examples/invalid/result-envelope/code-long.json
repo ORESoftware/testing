@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "message": "long code",
+    "retryable": false
+  },
+  "ok": false
+}

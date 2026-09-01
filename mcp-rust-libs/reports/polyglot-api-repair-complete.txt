@@ -1,0 +1,13 @@
+Polyglot API repair toolchains:
+- Rust 1.97.1 with clippy and rustfmt
+- Dart 3.12.2
+- Gleam 1.17.0 on OTP 29.0.1
+
+Repairs preserve the canonical schema and fixture behavior while:
+- importing Gleam Option constructors and using the built-in UtfCodepoint type;
+- using the package-name Gleam test module expected by `gleam test`;
+- separating generated-code documentation policy from handwritten Rust exports;
+- marking the consuming Rust envelope builder as must-use;
+- carrying both repository licenses and a changelog into the Dart package;
+- removing an unnecessary Dart library declaration; and
+- keeping carrier and target cargo-deny invocations consistent.

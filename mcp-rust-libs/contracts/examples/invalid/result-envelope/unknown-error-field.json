@@ -1,0 +1,9 @@
+{
+  "error": {
+    "code": "bad.extra",
+    "message": "unknown field",
+    "retryable": false,
+    "stack": "secret"
+  },
+  "ok": false
+}

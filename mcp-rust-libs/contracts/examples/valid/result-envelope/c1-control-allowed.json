@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "unicode.c1",
+    "message": "allowedby-schema",
+    "retryable": false
+  },
+  "ok": false
+}

@@ -1,0 +1,10 @@
+Native repair toolchains:
+- Rust 1.97.1 with rustfmt
+- Dart 3.12.2
+- Gleam 1.17.0 on OTP 29.0.1
+
+Generated Rust, Dart, and Gleam sources were formatted with their
+pinned native tools, synchronized back to generator templates, and
+checked for deterministic regeneration drift. The Gleam control and
+character-class predicates were translated to valid equivalent syntax
+without changing the canonical contract policy.

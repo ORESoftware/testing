@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "empty.message",
+    "message": "",
+    "retryable": false
+  },
+  "ok": false
+}

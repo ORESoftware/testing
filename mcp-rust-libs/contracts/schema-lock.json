@@ -1,0 +1,20 @@
+{
+  "generator": {
+    "name": "ore-mcp-codegen",
+    "version": "0.1.0"
+  },
+  "lock_version": 1,
+  "portable_profile": "ore-mcp-json-schema-profile/v1",
+  "schemas": [
+    {
+      "id": "https://schemas.oresoftware.com/mcp/common/v1/result-envelope.schema.json",
+      "path": "contracts/schemas/common/v1/result-envelope.schema.json",
+      "sha256": "2f28d646fa7ada0b3d2edd3c5ee19d663543e11117bbb37f4609307c6a9ff61e",
+      "version": "1.0.0"
+    }
+  ],
+  "upstream_mcp_specification": {
+    "policy": "pin-official-spec-without-copying",
+    "version": "UNPINNED-IN-SCAFFOLD"
+  }
+}

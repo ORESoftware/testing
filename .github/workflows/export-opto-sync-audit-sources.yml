@@ -1,0 +1,59 @@
+name: Export exact Opto-Sync audit sources
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .github/workflows/export-opto-sync-audit-sources.yml
+  push:
+    branches:
+      - audit/opto-sync-source-export-20260819
+    paths:
+      - .github/workflows/export-opto-sync-audit-sources.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact test-org head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: opto-sync-test/.github
+          ref: 8c11b7de546b2e53a9355d3fba50fb51d6ba180d
+          path: test-org
+          persist-credentials: false
+
+      - name: Checkout exact E2E harness head
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: opto-sync/opto-sync-e2e
+          ref: acd7e32cdd274d6cc22ade10bbcd744069e44c51
+          path: e2e
+          persist-credentials: false
+
+      - name: Verify immutable source identities and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C test-org rev-parse HEAD)" = 8c11b7de546b2e53a9355d3fba50fb51d6ba180d
+          test "$(git -C e2e rev-parse HEAD)" = acd7e32cdd274d6cc22ade10bbcd744069e44c51
+          find test-org e2e -type d -name .git -prune -exec rm -rf {} +
+          tar --sort=name --mtime='UTC 2026-08-19' --owner=0 --group=0 --numeric-owner \
+            -czf opto-sync-audit-sources.tar.gz test-org e2e
+          sha256sum opto-sync-audit-sources.tar.gz > opto-sync-audit-sources.tar.gz.sha256
+
+      - name: Upload exact sources
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: opto-sync-audit-sources
+          path: |
+            opto-sync-audit-sources.tar.gz
+            opto-sync-audit-sources.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0

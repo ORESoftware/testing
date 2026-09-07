@@ -55,7 +55,7 @@ jobs:
           5991f74f2fc8613b76c60732c85d596713aa997b06b219f2c61e3919a8d0a6a6  part-05
           SUMS
           cat part-* | base64 --decode > "$RUNNER_TEMP/ores-cli-source.tar.gz"
-          echo "cd385a40e43eb8e8b2475b0bb2cc5fa87f9aaa462229cec2fe3ecf49d4e79576  $RUNNER_TEMP/ores-cli-source.tar.gz" | sha256sum --check
+          echo "cd38502f7180ed8879778deea495e8fa0c6187ed953e9272623abf263842f8d5  $RUNNER_TEMP/ores-cli-source.tar.gz" | sha256sum --check
           mkdir -p ../source
           tar -xzf "$RUNNER_TEMP/ores-cli-source.tar.gz" -C ../source
           printf '%s\n' "$ORES_CLI_SOURCE_REVISION" > ../source/.validated-source-revision

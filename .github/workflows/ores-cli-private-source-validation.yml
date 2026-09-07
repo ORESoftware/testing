@@ -1,0 +1,92 @@
+name: ores-cli private-source validation
+
+on:
+  push:
+    branches:
+      - DEN-2757-ores-cli-validation
+    paths:
+      - ".github/workflows/ores-cli-private-source-validation.yml"
+      - "ores-cli-validation/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ores-cli-private-source-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out validation carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Check out exact private ores-cli revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-cli
+          ref: 6dbd058080b03eea9aa6971baa98fff13ef78876
+          token: ${{ secrets.CLI_CI_GITHUB_TOKEN || github.token }}
+          path: ores-cli-validation/source
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt,clippy
+
+      - name: Generate dependency lock
+        working-directory: ores-cli-validation/source
+        run: cargo generate-lockfile
+
+      - name: Check formatting
+        working-directory: ores-cli-validation/source
+        run: cargo fmt --all -- --check
+
+      - name: Strict Clippy
+        working-directory: ores-cli-validation/source
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Run all tests
+        working-directory: ores-cli-validation/source
+        run: cargo test --all-targets --all-features --locked
+
+      - name: Exercise repository and package audits
+        working-directory: ores-cli-validation/source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --quiet --locked -- audit repo --path . --profile rust-cli > repository-audit.jsonl
+          cargo run --quiet --locked -- audit package --path . > package-audit.jsonl
+          cargo run --quiet --locked -- --no-json audit package --path . > package-audit.txt
+          grep -F 'status=passed command=audit package' package-audit.txt
+          python3 - <<'PY'
+          import json
+          import pathlib
+          for path in ("repository-audit.jsonl", "package-audit.jsonl"):
+              records = [json.loads(line) for line in pathlib.Path(path).read_text().splitlines()]
+              assert records
+              assert all(record["schema"] == "next-loggers/v1" for record in records)
+              assert records[-1]["fields"]["event.kind"] == "summary"
+              assert records[-1]["fields"]["report.exit_code"] == 0
+          PY
+
+      - name: Upload reproducibility evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ores-cli-validation-${{ github.run_id }}
+          path: |
+            ores-cli-validation/source/Cargo.lock
+            ores-cli-validation/source/repository-audit.jsonl
+            ores-cli-validation/source/package-audit.jsonl
+            ores-cli-validation/source/package-audit.txt
+          if-no-files-found: warn
+          retention-days: 7

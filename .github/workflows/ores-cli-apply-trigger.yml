@@ -1,0 +1,26 @@
+name: dispatch generated ores-cli patch workflow
+
+on:
+  workflow_run:
+    workflows:
+      - generate ores-cli cross-repository validation workflow v2
+    types:
+      - completed
+    branches:
+      - DEN-2757-ores-cli-validation
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch generated patch workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ores-cli-apply-runner-patch.yml --repo ORESoftware/testing --ref DEN-2757-ores-cli-validation

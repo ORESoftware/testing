@@ -1,0 +1,59 @@
+name: ores-cli source hash report
+
+on:
+  push:
+    branches:
+      - DEN-2757-ores-cli-validation
+    paths:
+      - ".github/workflows/ores-cli-hash-report.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hashes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt
+      - name: Reconstruct and hash rustfmt output
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ores-cli-validation/archive
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("part-03")
+          data = path.read_text()
+          old = "pdcmbt+ocfp0azhRnKB"
+          new = "pdcmbt+ocfp0izhRnKB"
+          if data.endswith(old):
+              path.write_text(data[:-len(old)] + new)
+          elif not data.endswith(new):
+              raise SystemExit("part-03 repair precondition failed")
+          PY
+          sha256sum --check <<'SUMS'
+          067df97d8cd7816ac2d7bb106c9cb2b3baf1725f5718a0b9d0dd0f35fcb4e564  part-00
+          cef3cc7b354d9ce885b3dc1725c5a1bb1b7acc19d9546c796adea558d69aa365  part-01
+          d172dd31a3b49e5633bb560f4dc8e8e176b2ef29cb52fb53e5527203898c056a  part-02
+          953fc908bd12d2a9f14018a2783c414f4b5dae405be40ef8c95af37fd3fa9459  part-03
+          79743831d5918f7fca21d35ac800ba135bee29a37c29c6150090a64e0182b7ec  part-04
+          5991f74f2fc8613b76c60732c85d596713aa997b06b219f2c61e3919a8d0a6a6  part-05
+          SUMS
+          cat part-* | base64 --decode > "$RUNNER_TEMP/ores-cli-source.tar.gz"
+          echo "cd38502f7180ed8879778deea495e8fa0c6187ed953e9272623abf263842f8d5  $RUNNER_TEMP/ores-cli-source.tar.gz" | sha256sum --check
+          mkdir -p ../hash-source
+          tar -xzf "$RUNNER_TEMP/ores-cli-source.tar.gz" -C ../hash-source
+          cd ../hash-source
+          cargo fmt --all
+          printf 'GIT_OBJECT_HASH src/github.rs=%s\n' "$(git hash-object src/github.rs)"
+          printf 'GIT_OBJECT_HASH src/lib.rs=%s\n' "$(git hash-object src/lib.rs)"
+          printf 'GIT_OBJECT_HASH src/model.rs=%s\n' "$(git hash-object src/model.rs)"
+          printf 'GIT_OBJECT_HASH src/output.rs=%s\n' "$(git hash-object src/output.rs)"

@@ -70,9 +70,20 @@ jobs:
         working-directory: ores-cli-validation/source
         run: cargo generate-lockfile
 
-      - name: Check formatting
+      - name: Format sources and verify formatter idempotence
         working-directory: ores-cli-validation/source
-        run: cargo fmt --all -- --check
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+
+      - name: Archive formatted validation source
+        working-directory: ores-cli-validation/source
+        run: |
+          set -euo pipefail
+          tar -czf validation-source.tar.gz Cargo.lock src tests
+          sha256sum validation-source.tar.gz > validation-source.sha256
+          printf 'source_revision=%s\ntransform=cargo fmt --all\n' "$ORES_CLI_SOURCE_REVISION" > validation-source.provenance
 
       - name: Strict Clippy
         working-directory: ores-cli-validation/source
@@ -110,6 +121,9 @@ jobs:
           path: |
             ores-cli-validation/source/.validated-source-revision
             ores-cli-validation/source/Cargo.lock
+            ores-cli-validation/source/validation-source.tar.gz
+            ores-cli-validation/source/validation-source.sha256
+            ores-cli-validation/source/validation-source.provenance
             ores-cli-validation/source/repository-audit.jsonl
             ores-cli-validation/source/package-audit.jsonl
             ores-cli-validation/source/package-audit.txt

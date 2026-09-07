@@ -35,6 +35,17 @@ jobs:
         run: |
           set -euo pipefail
           cd ores-cli-validation/archive
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("part-03")
+          data = path.read_text()
+          old = "pdcmbt+ocfp0azhRnKB"
+          new = "pdcmbt+ocfp0izhRnKB"
+          if not data.endswith(old):
+              raise SystemExit("part-03 carrier repair precondition failed")
+          path.write_text(data[:-len(old)] + new)
+          PY
           sha256sum --check <<'SUMS'
           067df97d8cd7816ac2d7bb106c9cb2b3baf1725f5718a0b9d0dd0f35fcb4e564  part-00
           cef3cc7b354d9ce885b3dc1725c5a1bb1b7acc19d9546c796adea558d69aa365  part-01

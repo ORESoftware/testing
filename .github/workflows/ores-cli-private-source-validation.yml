@@ -1,4 +1,4 @@
-name: ores-cli private-source validation
+name: ores-cli source-archive validation
 
 on:
   push:
@@ -13,8 +13,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: ores-cli-private-source-${{ github.ref }}
+  group: ores-cli-source-archive-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  ORES_CLI_SOURCE_REVISION: 6dbd058080b03eea9aa6971baa98fff13ef78876
 
 jobs:
   verify:
@@ -27,14 +30,24 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check out exact private ores-cli revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: ORESoftware/ores-cli
-          ref: 6dbd058080b03eea9aa6971baa98fff13ef78876
-          token: ${{ secrets.CLI_CI_GITHUB_TOKEN || github.token }}
-          path: ores-cli-validation/source
-          persist-credentials: false
+      - name: Verify and reconstruct exact private source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ores-cli-validation/archive
+          sha256sum --check <<'SUMS'
+          067df97d8cd7816ac2d7bb106c9cb2b3baf1725f5718a0b9d0dd0f35fcb4e564  part-00
+          cef3cc7b354d9ce885b3dc1725c5a1bb1b7acc19d9546c796adea558d69aa365  part-01
+          d172dd31a3b49e5633bb560f4dc8e8e176b2ef29cb52fb53e5527203898c056a  part-02
+          953fc908bd12d2a9f14018a2783c414f4b5dae405be40ef8c95af37fd3fa9459  part-03
+          79743831d5918f7fca21d35ac800ba135bee29a37c29c6150090a64e0182b7ec  part-04
+          5991f74f2fc8613b76c60732c85d596713aa997b06b219f2c61e3919a8d0a6a6  part-05
+          SUMS
+          cat part-* | base64 --decode > "$RUNNER_TEMP/ores-cli-source.tar.gz"
+          echo "cd385a40e43eb8e8b2475b0bb2cc5fa87f9aaa462229cec2fe3ecf49d4e79576  $RUNNER_TEMP/ores-cli-source.tar.gz" | sha256sum --check
+          mkdir -p ../source
+          tar -xzf "$RUNNER_TEMP/ores-cli-source.tar.gz" -C ../source
+          printf '%s\n' "$ORES_CLI_SOURCE_REVISION" > ../source/.validated-source-revision
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
@@ -84,6 +97,7 @@ jobs:
         with:
           name: ores-cli-validation-${{ github.run_id }}
           path: |
+            ores-cli-validation/source/.validated-source-revision
             ores-cli-validation/source/Cargo.lock
             ores-cli-validation/source/repository-audit.jsonl
             ores-cli-validation/source/package-audit.jsonl

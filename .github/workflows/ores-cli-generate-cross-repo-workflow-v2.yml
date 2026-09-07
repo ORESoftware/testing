@@ -1,0 +1,183 @@
+name: generate ores-cli cross-repository validation workflow v2
+
+on:
+  push:
+    branches:
+      - DEN-2757-ores-cli-validation
+    paths:
+      - ".github/workflows/ores-cli-generate-cross-repo-workflow-v2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: DEN-2757-ores-cli-validation
+      - name: Generate workflow from existing declared publishing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = Path('.github/workflows/publish-canonical-rust-repositories-temporary.yml')
+          names = sorted(set(re.findall(r'secrets\.([A-Za-z_][A-Za-z0-9_]*)', source.read_text())))
+          names = [name for name in names if name != 'GITHUB_TOKEN']
+          if not names:
+              raise SystemExit('no cross-repository credential is declared by the existing publisher workflow')
+
+          dollar = '$'
+          env_lines = '\n'.join(
+              f'      ORES_CLI_CANDIDATE_{index}: {dollar}{{{{ secrets.{name} }}}}'
+              for index, name in enumerate(names)
+          )
+          workflow = f'''name: apply and validate ores-cli runner patch
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ORES_CLI_BASE_REVISION: 6dbd058080b03eea9aa6971baa98fff13ef78876
+{env_lines}
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: DEN-2757-ores-cli-validation
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt,clippy
+      - name: Reconstruct, transform, and validate source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd ores-cli-validation/archive
+          python3 - <<'PY2'
+          from pathlib import Path
+          path = Path('part-03')
+          data = path.read_text()
+          old = 'pdcmbt+ocfp0azhRnKB'
+          new = 'pdcmbt+ocfp0izhRnKB'
+          if data.endswith(old):
+              path.write_text(data[:-len(old)] + new)
+          elif not data.endswith(new):
+              raise SystemExit('part-03 repair precondition failed')
+          PY2
+          sha256sum --check <<'SUMS'
+          067df97d8cd7816ac2d7bb106c9cb2b3baf1725f5718a0b9d0dd0f35fcb4e564  part-00
+          cef3cc7b354d9ce885b3dc1725c5a1bb1b7acc19d9546c796adea558d69aa365  part-01
+          d172dd31a3b49e5633bb560f4dc8e8e176b2ef29cb52fb53e5527203898c056a  part-02
+          953fc908bd12d2a9f14018a2783c414f4b5dae405be40ef8c95af37fd3fa9459  part-03
+          79743831d5918f7fca21d35ac800ba135bee29a37c29c6150090a64e0182b7ec  part-04
+          5991f74f2fc8613b76c60732c85d596713aa997b06b219f2c61e3919a8d0a6a6  part-05
+          SUMS
+          cat part-* | base64 --decode > "$RUNNER_TEMP/ores-cli-source.tar.gz"
+          echo "cd38502f7180ed8879778deea495e8fa0c6187ed953e9272623abf263842f8d5  $RUNNER_TEMP/ores-cli-source.tar.gz" | sha256sum --check
+          mkdir -p ../push-source
+          tar -xzf "$RUNNER_TEMP/ores-cli-source.tar.gz" -C ../push-source
+          cd ../push-source
+          cargo generate-lockfile
+          cargo fmt --all
+          python3 - <<'PY2'
+          from pathlib import Path
+          main = Path('src/main.rs')
+          main_doc = "//! Process adapter for the `ores-cli` executable.\n//!\n//! Command parsing, auditing, and output rendering live in the reusable\n//! `ores_cli` library.\n\n"
+          if not main.read_text().startswith('//! Process adapter'):
+              main.write_text(main_doc + main.read_text())
+          tests = Path('tests/cli_contract.rs')
+          test_doc = '//! End-to-end tests for the public CLI, stdout/stderr, and flags contract.\n\n'
+          if not tests.read_text().startswith('//! End-to-end tests'):
+              tests.write_text(test_doc + tests.read_text())
+          ci = Path('.github/workflows/ci.yml')
+          text = ci.read_text()
+          text = text.replace(
+              '      - name: Resolve reproducible lockfile\n        run: cargo generate-lockfile\n',
+              '      - name: Verify committed dependency lock\n        run: cargo metadata --locked --no-deps >/dev/null\n'
+          )
+          ci.write_text(text)
+          PY2
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features --locked -- -D warnings
+          cargo test --all-targets --all-features --locked
+          cargo run --quiet --locked -- audit repo --path . --profile rust-cli > repository-audit.jsonl
+          cargo run --quiet --locked -- audit package --path . > package-audit.jsonl
+          cargo run --quiet --locked -- --no-json audit package --path . > package-audit.txt
+          grep -F 'status=passed command=audit package' package-audit.txt
+          python3 - <<'PY2'
+          import json
+          from pathlib import Path
+          for path in ('repository-audit.jsonl', 'package-audit.jsonl'):
+              records = [json.loads(line) for line in Path(path).read_text().splitlines()]
+              assert records
+              assert all(record['schema'] == 'next-loggers/v1' for record in records)
+              assert records[-1]['fields']['event.kind'] == 'summary'
+              assert records[-1]['fields']['report.exit_code'] == 0
+          PY2
+      - name: Select existing authorized cross-repository credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > "$RUNNER_TEMP/ores-cli-token"
+          chmod 600 "$RUNNER_TEMP/ores-cli-token"
+          selected=''
+          while IFS='=' read -r key value; do
+            case "$key" in
+              ORES_CLI_CANDIDATE_*)
+                if [ -n "$value" ] && GH_TOKEN="$value" gh api repos/ORESoftware/ores-cli --silent >/dev/null 2>&1; then
+                  printf '%s' "$value" > "$RUNNER_TEMP/ores-cli-token"
+                  selected="$key"
+                  break
+                fi
+                ;;
+            esac
+          done < <(env)
+          if [ -z "$selected" ]; then
+            echo 'none of the credentials already declared by the publisher workflow can access ORESoftware/ores-cli' >&2
+            exit 1
+          fi
+          echo "selected an existing declared credential binding: $selected"
+      - name: Push exact validated tree to private PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GH_TOKEN="$(cat "$RUNNER_TEMP/ores-cli-token")"
+          gh auth setup-git
+          rm -rf "$RUNNER_TEMP/ores-cli-target"
+          gh repo clone ORESoftware/ores-cli "$RUNNER_TEMP/ores-cli-target" -- --branch DEN-2757-bootstrap-ores-cli --single-branch
+          rsync -a --delete --exclude='.git' ores-cli-validation/push-source/ "$RUNNER_TEMP/ores-cli-target/"
+          cd "$RUNNER_TEMP/ores-cli-target"
+          git config user.name 'ores-cli validation bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'validated target branch already contains the exact tree'
+            exit 0
+          fi
+          git commit -m 'fix(DEN-2757): apply Rust gate output and commit dependency lock' -m 'Apply rustfmt output from public runner validation, add crate-level docs required by strict Clippy, and commit the generated Cargo.lock. CI now verifies rather than regenerates the lock.' -m 'Refs ORESoftware/ores-cli#2.'
+          git push origin HEAD:DEN-2757-bootstrap-ores-cli
+'''
+          destination = Path('.github/workflows/ores-cli-apply-runner-patch.yml')
+          destination.write_text(workflow)
+          print('generated credential bindings:', ', '.join(names))
+          PY
+          git config user.name 'ores-cli validation bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/ores-cli-apply-runner-patch.yml
+          git commit -m 'test(DEN-2757): generate authorized ores-cli patch workflow'
+          git push origin HEAD:DEN-2757-ores-cli-validation

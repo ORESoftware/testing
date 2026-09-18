@@ -1,0 +1,50 @@
+name: Diagnose current Meta-Agent carrier Clippy failure
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/diagnose-meta-agent-carrier-temporary.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out exact carrier source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: f1d3fb515f1ad9c1876afff07ceadb9d21030cc5
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+
+      - name: Run Clippy with linked diagnostics
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: f1d3fb515f1ad9c1876afff07ceadb9d21030cc5
+        run: |
+          set -Eeuo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          publish_status() {
+            gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/statuses/$TARGET_SHA" \
+              -f state="$1" \
+              -f context=meta-agent/clippy-diagnostic \
+              -f description="$2" \
+              -f target_url="$run_url" >/dev/null
+          }
+          trap 'publish_status failure "Clippy failed; inspect linked job log"' ERR
+          publish_status pending 'Pinned Clippy diagnostic running'
+          cargo +1.97.1 generate-lockfile
+          cargo +1.97.1 clippy --locked --all-targets --all-features -- -D warnings
+          trap - ERR
+          publish_status success 'Pinned Clippy passed'

@@ -1,0 +1,145 @@
+name: Publish exact Meta Agents repository with owner authorization
+run-name: Create meta-agents-demo/meta-agent-control-plane.rs @ ${{ github.sha }}
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/publish-canonical-rust-repositories-rerun.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: publish-exact-meta-agent-control-plane-device-auth
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out trusted control branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: master
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Authorize owner and publish the exact sealed repository
+        shell: bash
+        env:
+          COMMENT_TOKEN: ${{ github.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/meta-agent-device-auth-gh-config
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          readonly EXPECTED_LOGIN='ORESoftware'
+          readonly TARGET='meta-agents-demo/meta-agent-control-plane.rs'
+          readonly SOURCE_SHA='55ee15c190b7cfa4e075f6984c7cb551acd4b9d3'
+          readonly BUNDLE_SHA256='1ddaa03743b864348162149b7d2d2e2dce7eab585cf092ea14547c647fcec031'
+          readonly PUBLISHER_SHA256='e2fe6eaa622db02a54f83e27a822f64ad4b54971c883f97bbda4ac0a4db5d278'
+          readonly EXPECTED_MAIN='4d6ec3ad0ec7b688f0e777129eee7e0f0d999df1'
+          readonly EXPECTED_FEATURE='789d48039da232faed985d4f8de176959f117e08'
+          readonly FEATURE_REF='agent/den-1057-meta-agent-control-plane'
+
+          work="$RUNNER_TEMP/meta-agent-device-publication"
+          auth_log="$RUNNER_TEMP/meta-agent-device-auth.log"
+          auth_pid=''
+          code_context='meta-agent-publication/gh-device-auth'
+
+          publish_status() {
+            local state="$1" description="$2" context="${3:-meta-agent-publication/result}"
+            GH_TOKEN="$COMMENT_TOKEN" gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+              -f state="$state" -f context="$context" -f description="$description" \
+              -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" >/dev/null || true
+          }
+          cleanup() {
+            if [[ -n "$auth_pid" ]] && kill -0 "$auth_pid" 2>/dev/null; then
+              kill "$auth_pid" 2>/dev/null || true
+              wait "$auth_pid" 2>/dev/null || true
+            fi
+            rm -f "$auth_log"
+            rm -rf "$GH_CONFIG_DIR" "$work"
+          }
+          fail() {
+            publish_status failure 'Meta Agents repository publication failed' "$code_context"
+          }
+          trap fail ERR
+          trap cleanup EXIT
+          mkdir -p "$GH_CONFIG_DIR" "$work"
+
+          : > "$auth_log"
+          (
+            env -u GH_TOKEN -u GITHUB_TOKEN \
+              GH_PROMPT_DISABLED=1 NO_COLOR=1 BROWSER=/bin/false \
+              gh auth login --hostname github.com --git-protocol https --web \
+                --scopes repo,read:org,workflow --insecure-storage
+          ) > "$auth_log" 2>&1 &
+          auth_pid=$!
+
+          code=''
+          for _ in $(seq 1 45); do
+            code="$(tr -d '\r' < "$auth_log" | grep -Eo '[A-Z0-9]{4}-[A-Z0-9]{4}' | head -n1 || true)"
+            [[ -n "$code" ]] && break
+            kill -0 "$auth_pid" 2>/dev/null || break
+            sleep 1
+          done
+          [[ -n "$code" ]] || { echo '::error::GitHub CLI did not emit a device authorization code'; exit 1; }
+
+          code_context="meta-agent-publication/gh-device-auth/$code"
+          publish_status pending 'Authorize at github.com/login/device' "$code_context"
+          echo "::notice title=GitHub device authorization::Use code $code at https://github.com/login/device"
+
+          set +e
+          wait "$auth_pid"
+          auth_rc=$?
+          set -e
+          auth_pid=''
+          [[ "$auth_rc" -eq 0 ]] || { echo '::error::GitHub owner authorization failed or expired'; exit "$auth_rc"; }
+
+          actual_login="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api user --jq .login)"
+          [[ "$actual_login" = "$EXPECTED_LOGIN" ]]
+          membership="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api user/memberships/orgs/meta-agents-demo --jq '.role + ":" + .state')"
+          [[ "$membership" = admin:active ]]
+          publish_status success 'Authorized ORESoftware meta-agents-demo owner' "$code_context"
+
+          token="$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token)"
+          [[ -n "$token" && "$token" != *$'\n'* && "$token" != *$'\r'* && "$token" != *' '* ]]
+          echo "::add-mask::$token"
+          export GITHUB_REPOSITORY_ADMIN_TOKEN="$token"
+
+          source="$work/k8s-cluster"
+          git init "$source"
+          git -C "$source" remote add origin https://github.com/ORESoftware/k8s-cluster.git
+          git -C "$source" fetch --depth=1 origin "$SOURCE_SHA"
+          git -C "$source" checkout --detach FETCH_HEAD
+          [[ "$(git -C "$source" rev-parse HEAD)" = "$SOURCE_SHA" ]]
+
+          bundle="$work/meta-agent-control-plane-den-1057.bundle"
+          cat "$source"/scripts/critical-org-fleet/assets/meta.part* | base64 --decode > "$bundle"
+          printf '%s  %s\n' "$BUNDLE_SHA256" "$bundle" | sha256sum --check --strict
+          [[ "$(git bundle list-heads "$bundle" | wc -l)" -eq 2 ]]
+
+          publisher="$source/scripts/critical-org-fleet/publish_meta_control_plane.py"
+          printf '%s  %s\n' "$PUBLISHER_SHA256" "$publisher" | sha256sum --check --strict
+          python3 -m py_compile "$publisher"
+
+          publish_status pending 'Creating and pushing exact Meta Agents repository'
+          python3 "$publisher" "$bundle"
+
+          repo="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api "repos/$TARGET")"
+          [[ "$(jq -r .owner.login <<< "$repo")" = meta-agents-demo ]]
+          [[ "$(jq -r .visibility <<< "$repo")" = public ]]
+          [[ "$(jq -r .default_branch <<< "$repo")" = main ]]
+          main_sha="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api "repos/$TARGET/git/ref/heads/main" --jq .object.sha)"
+          feature_sha="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api "repos/$TARGET/git/ref/heads/$FEATURE_REF" --jq .object.sha)"
+          [[ "$main_sha" = "$EXPECTED_MAIN" ]]
+          [[ "$feature_sha" = "$EXPECTED_FEATURE" ]]
+
+          trap - ERR
+          publish_status success 'Created and verified meta-agent-control-plane.rs'
+          printf 'META_AGENT_REPOSITORY=%s\nMETA_AGENT_MAIN=%s\nMETA_AGENT_FEATURE=%s\n' "$TARGET" "$main_sha" "$feature_sha"

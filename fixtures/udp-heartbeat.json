@@ -1,0 +1,19 @@
+{
+  "protocol_version": "v1",
+  "event_id": "018f5c8a-d5a7-7f7c-8d61-84f55a35fe92",
+  "occurred_at": "2026-07-30T20:00:01Z",
+  "agent": {
+    "agent_id": "gemini-agent",
+    "provider": "google",
+    "model": "gemini",
+    "instance_id": "worker-3"
+  },
+  "session_id": "run-42",
+  "sequence": 9,
+  "kind": "heartbeat",
+  "data": {
+    "status": "running",
+    "active_task_id": "task-research",
+    "load": 0.4
+  }
+}

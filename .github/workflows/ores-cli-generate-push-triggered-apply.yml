@@ -1,0 +1,60 @@
+name: generate push-triggered ores-cli patch workflow
+
+on:
+  push:
+    branches:
+      - DEN-2757-ores-cli-validation
+    paths:
+      - ".github/workflows/ores-cli-generate-push-triggered-apply.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: DEN-2757-ores-cli-validation
+      - name: Convert generated apply workflow to a branch push trigger
+        shell: bash
+        run: |
+          set -euo pipefail
+          source=.github/workflows/ores-cli-apply-runner-patch.yml
+          for attempt in $(seq 1 30); do
+            [ -f "$source" ] && break
+            sleep 2
+            git pull --ff-only origin DEN-2757-ores-cli-validation
+          done
+          [ -f "$source" ] || { echo 'generated apply workflow was not created' >&2; exit 1; }
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/ores-cli-apply-runner-patch.yml')
+          text = source.read_text()
+          old = '''name: apply and validate ores-cli runner patch
+
+on:
+  workflow_dispatch:
+'''
+          new = '''name: apply and validate ores-cli runner patch v3
+
+on:
+  push:
+    branches:
+      - DEN-2757-ores-cli-validation
+    paths:
+      - "ores-cli-validation/dispatch-v3-*"
+'''
+          if old not in text:
+              raise SystemExit('generated workflow trigger precondition failed')
+          destination = Path('.github/workflows/ores-cli-apply-runner-patch-v3.yml')
+          destination.write_text(text.replace(old, new, 1))
+          PY
+          git config user.name 'ores-cli validation bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/ores-cli-apply-runner-patch-v3.yml
+          git commit -m 'test(DEN-2757): add push-triggered authorized patch workflow'
+          git push origin HEAD:DEN-2757-ores-cli-validation

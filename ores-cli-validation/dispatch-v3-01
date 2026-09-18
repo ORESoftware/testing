@@ -1,0 +1,1 @@
+Apply the checksum-pinned, rustfmt-normalized ores-cli source tree after its generated lockfile, strict Clippy, tests, repository audit, package audit, and stdout contract checks pass.

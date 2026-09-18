@@ -1,0 +1,259 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Meta-Agent Control Plane API",
+    "version": "0.1.0",
+    "description": "Provider-neutral telemetry for observable agent goals, tasks, progress, explicit reflection, and learned lessons. Hidden chain-of-thought is intentionally excluded."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Same-origin daemon API"
+    }
+  ],
+  "paths": {
+    "/api/v1/events": {
+      "post": {
+        "summary": "Ingest one agent event",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventEnvelope"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Duplicate event acknowledged within the bounded idempotency window"
+          },
+          "202": {
+            "description": "New event accepted"
+          },
+          "400": {
+            "description": "Malformed or invalid event"
+          },
+          "401": {
+            "description": "Authentication failed"
+          }
+        }
+      }
+    },
+    "/api/v1/snapshot": {
+      "get": {
+        "summary": "Read the current bounded in-memory projection",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current coherent projection and server revision"
+          },
+          "401": {
+            "description": "Read API authentication failed"
+          }
+        }
+      }
+    },
+    "/ws/agent": {
+      "get": {
+        "summary": "WebSocket agent ingestion",
+        "description": "Authenticate during upgrade and send EventEnvelope or TransportFrame JSON messages."
+      }
+    },
+    "/ws/ui": {
+      "get": {
+        "summary": "Live projection invalidation stream",
+        "description": "Emits StoreUpdate messages; clients refetch a sequence-watermarked snapshot."
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "Alive"
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "summary": "Readiness probe",
+        "responses": {
+          "200": {
+            "description": "Ready"
+          }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "summary": "Prometheus text exposition",
+        "responses": {
+          "200": {
+            "description": "Metrics"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque"
+      }
+    },
+    "schemas": {
+      "AgentRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "agent_id",
+          "provider",
+          "model"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "instance_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 256
+          }
+        }
+      },
+      "EventEnvelope": {
+        "type": "object",
+        "required": [
+          "protocol_version",
+          "event_id",
+          "occurred_at",
+          "agent",
+          "kind",
+          "data"
+        ],
+        "properties": {
+          "protocol_version": {
+            "const": "v1"
+          },
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/AgentRef"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 256
+          },
+          "correlation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 256
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "agent_registered",
+              "heartbeat",
+              "goal_declared",
+              "task_created",
+              "task_started",
+              "progress_updated",
+              "reflection_recorded",
+              "lesson_learned",
+              "error_observed",
+              "task_completed",
+              "agent_status_changed"
+            ]
+          },
+          "data": {
+            "type": "object"
+          }
+        }
+      },
+      "TransportFrame": {
+        "type": "object",
+        "required": [
+          "event"
+        ],
+        "properties": {
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "writeOnly": true
+          },
+          "event": {
+            "$ref": "#/components/schemas/EventEnvelope"
+          }
+        }
+      }
+    }
+  },
+  "x-meta-agent-event-kinds": [
+    "agent_registered",
+    "heartbeat",
+    "goal_declared",
+    "task_created",
+    "task_started",
+    "progress_updated",
+    "reflection_recorded",
+    "lesson_learned",
+    "error_observed",
+    "task_completed",
+    "agent_status_changed"
+  ],
+  "x-meta-agent-udp-event-kinds": [
+    "heartbeat",
+    "progress_updated",
+    "reflection_recorded",
+    "error_observed",
+    "agent_status_changed"
+  ]
+}

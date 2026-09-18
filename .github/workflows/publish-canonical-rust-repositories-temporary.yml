@@ -1,0 +1,242 @@
+name: Publish canonical Rust repositories with owner authorization
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/publish-canonical-rust-repositories-temporary.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: canonical-rust-repository-publication
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out trusted control branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Check out reviewed mcp-rust-libs carrier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: a6de8da34fe183359148961904dd4b9c00a5994e
+          path: mcp-carrier
+          persist-credentials: false
+
+      - name: Check out reviewed meta-agent carrier
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: f1d3fb515f1ad9c1876afff07ceadb9d21030cc5
+          path: meta-carrier
+          persist-credentials: false
+
+      - name: Authorize owner, create repositories, push, and verify
+        shell: bash
+        env:
+          COMMENT_TOKEN: ${{ github.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/canonical-rust-repositories-gh-config
+          EXPECTED_LOGIN: ORESoftware
+        run: |
+          set -Eeuo pipefail
+          status_sha="$GITHUB_SHA"
+          auth_log="$RUNNER_TEMP/canonical-rust-repositories-auth.log"
+          auth_pid=""
+          code_context="canonical-rust-repositories/gh-device-auth"
+          work_root="$RUNNER_TEMP/canonical-rust-repositories"
+
+          publish_status() {
+            local state="$1"
+            local description="$2"
+            local context="${3:-canonical-rust-repositories/publication}"
+            GH_TOKEN="$COMMENT_TOKEN" gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/statuses/$status_sha" \
+              -f state="$state" \
+              -f context="$context" \
+              -f description="$description" \
+              -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions" >/dev/null || true
+          }
+          cleanup() {
+            if [[ -n "$auth_pid" ]] && kill -0 "$auth_pid" 2>/dev/null; then
+              kill "$auth_pid" 2>/dev/null || true
+              wait "$auth_pid" 2>/dev/null || true
+            fi
+            rm -f "$auth_log"
+            rm -rf "$GH_CONFIG_DIR" "$work_root"
+          }
+          fail() {
+            publish_status failure "Canonical repository publication failed" "$code_context"
+          }
+          trap fail ERR
+          trap cleanup EXIT
+
+          mkdir -p "$GH_CONFIG_DIR" "$work_root"
+          : >"$auth_log"
+          (
+            env -u GH_TOKEN -u GITHUB_TOKEN \
+              GH_PROMPT_DISABLED=1 \
+              NO_COLOR=1 \
+              BROWSER=/bin/false \
+              gh auth login \
+                --hostname github.com \
+                --git-protocol https \
+                --web \
+                --scopes repo,read:org,workflow \
+                --insecure-storage
+          ) >"$auth_log" 2>&1 &
+          auth_pid=$!
+
+          code=""
+          for _ in $(seq 1 30); do
+            code="$(tr -d '\r' <"$auth_log" | grep -Eo '[A-Z0-9]{4}-[A-Z0-9]{4}' | head -n1 || true)"
+            if [[ -n "$code" ]]; then
+              break
+            fi
+            if ! kill -0 "$auth_pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          if [[ -z "$code" ]]; then
+            echo '::error::GitHub CLI did not emit a device authorization code.'
+            exit 1
+          fi
+
+          code_context="canonical-rust-repositories/gh-device-auth/$code"
+          publish_status pending "Authorize at github.com/login/device" "$code_context"
+          echo '::notice::Canonical repository authorization code published as a commit status.'
+
+          set +e
+          wait "$auth_pid"
+          auth_rc=$?
+          set -e
+          auth_pid=""
+          if [[ "$auth_rc" -ne 0 ]]; then
+            echo '::error::GitHub owner authorization failed or expired.'
+            exit "$auth_rc"
+          fi
+
+          actual_login="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api user --jq .login)"
+          test "$actual_login" = "$EXPECTED_LOGIN" || {
+            echo "::error::Authenticated as $actual_login, not $EXPECTED_LOGIN."
+            exit 1
+          }
+          membership="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api \
+            user/memberships/orgs/meta-agents-demo --jq '.role + ":" + .state')"
+          test "$membership" = 'admin:active' || {
+            echo "::error::$EXPECTED_LOGIN is not an active meta-agents-demo admin ($membership)."
+            exit 1
+          }
+          publish_status success "Authorized as ORESoftware and meta-agents-demo admin" "$code_context"
+
+          prepare_snapshot() {
+            local source="$1"
+            local destination="$2"
+            shift 2
+            mkdir -p "$destination"
+            cp -a "$source"/. "$destination"/
+            rm -rf "$destination/.git"
+            for remove in "$@"; do
+              rm -rf "$destination/$remove"
+            done
+            test -f "$destination/Cargo.toml"
+            git -C "$destination" init -b main
+            git -C "$destination" config user.name 'ORESoftware publication automation'
+            git -C "$destination" config user.email 'bot@oresoftware.dev'
+            git -C "$destination" add -A
+            GIT_AUTHOR_DATE='2026-07-31T00:00:00Z' \
+            GIT_COMMITTER_DATE='2026-07-31T00:00:00Z' \
+              git -C "$destination" commit -m 'feat: publish canonical repository source'
+          }
+
+          prepare_snapshot mcp-carrier/mcp-rust-libs "$work_root/mcp-rust-libs"
+          prepare_snapshot meta-carrier "$work_root/meta-agent-control-plane" \
+            '.github/workflows/materialize-meta-agent.yml'
+          test -f "$work_root/meta-agent-control-plane/src/main.rs"
+          test -f "$work_root/meta-agent-control-plane/src/lib.rs"
+
+          token="$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token)"
+          test -n "$token"
+          echo "::add-mask::$token"
+          export GITHUB_REPOSITORY_ADMIN_TOKEN="$token"
+          cat >"$RUNNER_TEMP/git-askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) echo x-access-token ;;
+            *) echo "$GITHUB_REPOSITORY_ADMIN_TOKEN" ;;
+          esac
+          SH
+          chmod 700 "$RUNNER_TEMP/git-askpass"
+          export GIT_ASKPASS="$RUNNER_TEMP/git-askpass"
+          export GIT_TERMINAL_PROMPT=0
+
+          ensure_user_repository() {
+            local name="$1"
+            local description="$2"
+            if env -u GH_TOKEN -u GITHUB_TOKEN gh api "repos/ORESoftware/$name" >/dev/null 2>&1; then
+              return
+            fi
+            env -u GH_TOKEN -u GITHUB_TOKEN gh api --method POST user/repos \
+              -f name="$name" \
+              -f description="$description" \
+              -F private=false \
+              -F has_issues=true \
+              -F has_projects=false \
+              -F has_wiki=false >/dev/null
+          }
+          ensure_org_repository() {
+            local organization="$1"
+            local name="$2"
+            local description="$3"
+            if env -u GH_TOKEN -u GITHUB_TOKEN gh api "repos/$organization/$name" >/dev/null 2>&1; then
+              return
+            fi
+            env -u GH_TOKEN -u GITHUB_TOKEN gh api --method POST \
+              "orgs/$organization/repos" \
+              -f name="$name" \
+              -f description="$description" \
+              -F private=false \
+              -F has_issues=true \
+              -F has_projects=false \
+              -F has_wiki=false >/dev/null
+          }
+          push_exact_main() {
+            local directory="$1"
+            local full_name="$2"
+            local expected
+            expected="$(git -C "$directory" rev-parse HEAD)"
+            existing="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api \
+              "repos/$full_name/git/ref/heads/main" --jq .object.sha 2>/dev/null || true)"
+            if [[ -n "$existing" ]]; then
+              test "$existing" = "$expected" || {
+                echo "::error::Refusing to overwrite $full_name/main ($existing != $expected)."
+                exit 1
+              }
+            else
+              git -C "$directory" remote add origin "https://github.com/$full_name.git"
+              git -C "$directory" push origin HEAD:refs/heads/main
+            fi
+            actual="$(env -u GH_TOKEN -u GITHUB_TOKEN gh api \
+              "repos/$full_name/git/ref/heads/main" --jq .object.sha)"
+            test "$actual" = "$expected"
+            echo "$full_name $actual"
+          }
+
+          publish_status pending "Creating and pushing mcp-rust-libs and meta-agent-control-plane"
+          ensure_user_repository mcp-rust-libs \
+            'Shared Rust, TypeScript, Dart, and Gleam MCP runtime, contracts, safety, telemetry, and testkit libraries'
+          ensure_org_repository meta-agents-demo meta-agent-control-plane.rs \
+            'Single-binary Rust meta-agent daemon and Leptos observability UI'
+          push_exact_main "$work_root/mcp-rust-libs" ORESoftware/mcp-rust-libs
+          push_exact_main "$work_root/meta-agent-control-plane" meta-agents-demo/meta-agent-control-plane.rs
+
+          trap - ERR
+          publish_status success "Created and verified both canonical repository main heads"

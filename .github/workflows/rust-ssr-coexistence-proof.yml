@@ -1,0 +1,73 @@
+name: Rust SSR public coexistence proof
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/rust-ssr-coexistence-proof.yml'
+      - 'rust-ssr-coexistence-proof/**'
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/rust-ssr-coexistence-proof.yml'
+      - 'rust-ssr-coexistence-proof/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-ssr-coexistence-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prove:
+    name: one Axum listener / Maud + Leptos + Dioxus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: rust-ssr-coexistence-proof
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate workflow syntax
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: .github/workflows/rust-ssr-coexistence-proof.yml
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: "1.97.0"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: rust-ssr-coexistence-proof
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Strict Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Prove live concurrent coexistence
+        shell: bash
+        env:
+          RUST_BACKTRACE: "1"
+        run: |
+          set -euo pipefail
+          install -d -m 700 test-results
+          cargo test --locked --all-targets \
+            one_listener_concurrently_serves_all_three_renderers \
+            -- --exact --nocapture 2>&1 \
+            | tee test-results/coexistence.log
+          sha256sum test-results/coexistence.log > test-results/coexistence.sha256
+      - name: Release build
+        run: cargo build --locked --release
+      - name: Upload non-secret proof
+        if: ${{ always() && hashFiles('rust-ssr-coexistence-proof/test-results/coexistence.log') != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rust-ssr-public-coexistence-${{ github.run_id }}
+          path: |
+            rust-ssr-coexistence-proof/test-results/coexistence.log
+            rust-ssr-coexistence-proof/test-results/coexistence.sha256
+          if-no-files-found: error
+          retention-days: 14

@@ -1,0 +1,129 @@
+name: Publish Meta-Agent Control Plane to canonical organization
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out materialized source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: incubator/meta-agent-control-plane
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate the ordinary source carrier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f Cargo.toml
+          test -f src/main.rs
+          test -f src/lib.rs
+          test -f .github/workflows/ci.yml
+          test -f scripts/verify_contract.py
+          test ! -d .bootstrap
+          git diff --check
+          ! grep -R -n -E '^(<<<<<<<|=======|>>>>>>>)' \
+            --exclude-dir=.git \
+            --exclude='*.lock' .
+          python3 scripts/verify_contract.py
+
+      - name: Prepare a workflow-scope-neutral canonical tree
+        id: canonical
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'ORESoftware publication automation'
+          git config user.email 'bot@oresoftware.dev'
+          git rm .github/workflows/materialize-meta-agent.yml
+          git mv .github/workflows/ci.yml .meta-agent-ci.yml.pending
+          git commit -m 'build: prepare canonical Meta Agents repository'
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push the canonical repository
+        shell: bash
+        env:
+          GITHUB_REPOSITORY_ADMIN_TOKEN: ${{ secrets.META_AGENTS_DEMO_REPOSITORY_ADMIN_TOKEN || secrets.REMOTE_DEV_GH_PAT || secrets.ORG_GITOPS_TOKEN || secrets.GITHUB_REPOSITORY_ADMIN_TOKEN }}
+          CANONICAL_SHA: ${{ steps.canonical.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GITHUB_REPOSITORY_ADMIN_TOKEN:-}" ]]; then
+            echo '::error::No Meta Agents repository-administration credential is configured in ORESoftware/testing.'
+            exit 78
+          fi
+          printf '::add-mask::%s\n' "$GITHUB_REPOSITORY_ADMIN_TOKEN"
+
+          api=https://api.github.com
+          headers=(
+            -H 'Accept: application/vnd.github+json'
+            -H "Authorization: Bearer $GITHUB_REPOSITORY_ADMIN_TOKEN"
+            -H 'X-GitHub-Api-Version: 2022-11-28'
+          )
+          status="$(curl --silent --show-error --output /tmp/repo.json --write-out '%{http_code}' \
+            "${headers[@]}" \
+            "$api/repos/meta-agents-demo/meta-agent-control-plane.rs")"
+          case "$status" in
+            200)
+              echo 'canonical repository already exists'
+              ;;
+            404)
+              create_status="$(curl --silent --show-error --output /tmp/create.json --write-out '%{http_code}' \
+                --request POST \
+                "${headers[@]}" \
+                "$api/orgs/meta-agents-demo/repos" \
+                --data '{"name":"meta-agent-control-plane.rs","description":"Single-binary Rust meta-agent daemon and Leptos observability UI","private":false,"has_issues":true,"has_projects":false,"has_wiki":false,"auto_init":false}')"
+              test "$create_status" = 201 || {
+                echo "repository creation failed with HTTP $create_status" >&2
+                cat /tmp/create.json >&2
+                exit 1
+              }
+              ;;
+            *)
+              echo "repository lookup failed with HTTP $status" >&2
+              cat /tmp/repo.json >&2
+              exit 1
+              ;;
+          esac
+
+          ref_status="$(curl --silent --show-error --output /tmp/ref.json --write-out '%{http_code}' \
+            "${headers[@]}" \
+            "$api/repos/meta-agents-demo/meta-agent-control-plane.rs/git/ref/heads/main")"
+          if [[ "$ref_status" = 200 ]]; then
+            actual="$(jq -r '.object.sha' /tmp/ref.json)"
+            test "$actual" = "$CANONICAL_SHA" || {
+              echo "refusing to overwrite existing main: $actual != $CANONICAL_SHA" >&2
+              exit 1
+            }
+            echo "canonical main already verified at $actual"
+            exit 0
+          fi
+          test "$ref_status" = 404 || {
+            echo "main ref lookup failed with HTTP $ref_status" >&2
+            cat /tmp/ref.json >&2
+            exit 1
+          }
+
+          cat > /tmp/git-askpass <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) echo x-access-token ;;
+            *) echo "$GITHUB_REPOSITORY_ADMIN_TOKEN" ;;
+          esac
+          SH
+          chmod 700 /tmp/git-askpass
+          git remote add canonical https://github.com/meta-agents-demo/meta-agent-control-plane.rs.git
+          GIT_ASKPASS=/tmp/git-askpass GIT_TERMINAL_PROMPT=0 \
+            git push canonical HEAD:refs/heads/main
+          rm -f /tmp/git-askpass
+
+          actual="$(curl --silent --show-error "${headers[@]}" \
+            "$api/repos/meta-agents-demo/meta-agent-control-plane.rs/git/ref/heads/main" \
+            | jq -r '.object.sha')"
+          test "$actual" = "$CANONICAL_SHA"
+          echo "published meta-agents-demo/meta-agent-control-plane.rs at $actual"

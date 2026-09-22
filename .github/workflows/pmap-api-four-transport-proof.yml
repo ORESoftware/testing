@@ -1,0 +1,38 @@
+name: pmap-api-four-transport-proof
+
+on:
+  push:
+    branches: [ci/pmap-api-four-transport-proof-20260921]
+    paths:
+      - ".github/workflows/pmap-api-four-transport-proof.yml"
+      - "scratch/pmap-api-four-transport-proof/**"
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+      - name: Generate immutable lockfile
+        working-directory: scratch/pmap-api-four-transport-proof
+        run: cargo generate-lockfile
+      - name: Test exact adapter source
+        working-directory: scratch/pmap-api-four-transport-proof
+        run: cargo test --locked
+      - name: Clippy exact adapter source
+        working-directory: scratch/pmap-api-four-transport-proof
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Assert immutable transport revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'rev = "1fb45fe0f954440dfc8eaa56ba1c4cf002e17ff7"' scratch/pmap-api-four-transport-proof/Cargo.toml
+          ! grep -R --line-number 'branch *= *"main"' scratch/pmap-api-four-transport-proof

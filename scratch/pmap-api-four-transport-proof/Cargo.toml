@@ -1,0 +1,13 @@
+[package]
+name = "pmap-api-four-transport-proof"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+ores-transport = { git = "https://github.com/ORESoftware/ores-transport.git", rev = "1fb45fe0f954440dfc8eaa56ba1c4cf002e17ff7" }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+
+[lints.rust]
+unsafe_code = "forbid"

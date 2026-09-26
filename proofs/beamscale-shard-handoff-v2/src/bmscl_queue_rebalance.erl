@@ -15,12 +15,15 @@ begin_handoff(LogState, ShardScope, PlacementEpoch, TargetReplicas)
        is_list(TargetReplicas) ->
     OldReplicas = maps:get(replicas, LogState),
     Barrier = bmscl_queue_quorum_log:migration_barrier(LogState),
+    DurableProgress = maps:get(durable_progress, LogState),
+    TargetProgress = maps:with(TargetReplicas, DurableProgress),
     bmscl_shard_rebalancer:begin_handoff(
       ShardScope,
       PlacementEpoch,
       OldReplicas,
       TargetReplicas,
-      Barrier);
+      Barrier,
+      TargetProgress);
 begin_handoff(_, _, _, _) ->
     {error, invalid_queue_handoff}.
 
@@ -43,7 +46,7 @@ mark_retired(ShardScope, Replica) ->
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
-queue_handoff_uses_committed_prefix_not_tail_test() ->
+queue_handoff_uses_committed_prefix_and_verified_progress_test() ->
     PreviousStore = application:get_env(bmscl_supervisor, durable_store_module),
     application:set_env(
       bmscl_supervisor,
@@ -52,12 +55,8 @@ queue_handoff_uses_committed_prefix_not_tail_test() ->
     try
         ok = bmscl_durable_test_store:reset(),
         {ok, Log0} = bmscl_queue_quorum_log:new(
-            <<"orders:0">>,
-            9,
-            <<"a">>,
-            [<<"a">>, <<"b">>, <<"c">>],
-            2,
-            1024),
+            <<"orders:0">>, 9, <<"a">>,
+            [<<"a">>, <<"b">>, <<"c">>], 2, 1024),
         {ok, _, Log1} = bmscl_queue_quorum_log:append(
             Log0, 9, <<"a">>, 1000, <<"r1">>, <<"committed">>),
         {ok, Log2} = bmscl_queue_quorum_log:record_replica_durable(
@@ -70,12 +69,15 @@ queue_handoff_uses_committed_prefix_not_tail_test() ->
                   namespace => <<"orders">>,
                   virtual_shard => 17},
         {ok, #{state := Handoff0}} = begin_handoff(
-            Log3,
-            Scope,
-            50,
-            [<<"b">>, <<"c">>, <<"d">>]),
+            Log3, Scope, 50, [<<"b">>, <<"c">>, <<"d">>]),
         ?assertEqual(1, maps:get(barrier_position, Handoff0)),
+        Progress0 = maps:get(progress, Handoff0),
+        ?assertEqual(1, maps:get(<<"b">>, Progress0)),
+        ?assertEqual(0, maps:get(<<"c">>, Progress0)),
+        ?assertEqual(0, maps:get(<<"d">>, Progress0)),
         {ok, _} = record_target_progress(Scope, <<"d">>, 1),
+        ?assertEqual({error, target_not_caught_up}, cutover(Scope, 51)),
+        {ok, _} = record_target_progress(Scope, <<"c">>, 1),
         {ok, #{owner_epoch := Epoch, state := Cutover}} = cutover(Scope, 51),
         ?assert(Epoch > 0),
         ?assertEqual(cutover, maps:get(phase, Cutover))

@@ -1,0 +1,40 @@
+name: BeamScale shard handoff proof
+
+on:
+  pull_request:
+  push:
+    branches:
+      - proof/beamscale-shard-handoff-v1
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          otp-version: '27.3'
+      - name: Compile exact BeamScale fixture
+        run: |
+          mkdir -p _proof
+          erlc -DTEST -o _proof proofs/beamscale-shard-handoff/bmscl_shard_handoff.erl
+      - name: Run EUnit proofs
+        run: |
+          erl -noshell -pa _proof -eval 'case eunit:test(bmscl_shard_handoff, [verbose]) of ok -> halt(0); _ -> halt(1) end.'
+      - name: Verify handoff barrier scenario
+        run: |
+          erl -noshell -pa _proof -eval '
+            {ok,S0}=bmscl_shard_handoff:begin_handoff(#{virtual_shard=>17},71,[<<"a">>,<<"b">>,<<"c">>],[<<"b">>,<<"c">>,<<"d">>],10044),
+            false=bmscl_shard_handoff:can_cutover(S0),
+            {error,target_not_caught_up}=bmscl_shard_handoff:advance_placement_epoch(S0,72),
+            {ok,S1}=bmscl_shard_handoff:record_progress(S0,<<"d">>,10044),
+            true=bmscl_shard_handoff:can_cutover(S1),
+            {ok,S2}=bmscl_shard_handoff:advance_placement_epoch(S1,72),
+            [<<"a">>]=maps:get(fenced_replicas,S2),
+            halt(0).'

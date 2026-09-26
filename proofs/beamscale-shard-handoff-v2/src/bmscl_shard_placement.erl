@@ -250,15 +250,15 @@ canonical_scope(#{tenant_id := Tenant,
                   virtual_shard := VirtualShard}) ->
     {Tenant, Application, Namespace, VirtualShard}.
 
-score_before({ScoreA, IdA, _}, {ScoreB, IdB, _}) when ScoreA < ScoreB ->
+score_before({ScoreA, _IdA, _}, {ScoreB, _IdB, _}) when ScoreA < ScoreB ->
     true;
 score_before({ScoreA, _IdA, _}, {ScoreB, _IdB, _}) when ScoreA > ScoreB ->
     false;
-score_before({_Score, IdA, _}, {_Score, IdB, _}) ->
+score_before({_ScoreA, IdA, _}, {_ScoreB, IdB, _}) ->
     IdA < IdB.
 
 choose_failure_domains(Ranked, ReplicaCount) ->
-    {Diverse, SeenDomains} = take_distinct_domains(Ranked, ReplicaCount, [], []),
+    {Diverse, _SeenDomains} = take_distinct_domains(Ranked, ReplicaCount, [], []),
     case length(Diverse) of
         ReplicaCount ->
             Diverse;

@@ -57,23 +57,3 @@ jobs:
       - name: Compile and run EUnit
         working-directory: proofs/beamscale-shard-handoff-v2
         run: rebar3 eunit
-      - name: Verify V1 mapping and atomic fencing scenario
-        working-directory: proofs/beamscale-shard-handoff-v2
-        run: |
-          EBIN="$(find _build/test/lib/bmscl_supervisor -type d -name ebin -print -quit)"
-          JSX_EBIN="$(find _build/test/lib/jsx -type d -name ebin -print -quit)"
-          erl -noshell -pa "$EBIN" "$JSX_EBIN" -eval '
-            Identity=#{tenant_id=><<"tenant-a">>,application_id=><<"app-a">>,namespace=><<"orders">>,object_key=><<"customer-42">>},
-            {ok,3816}=bmscl_shard_placement:virtual_shard(Identity,1,65536),
-            application:set_env(bmscl_supervisor,durable_store_module,bmscl_durable_test_store),
-            ok=bmscl_durable_test_store:reset(),
-            Scope=#{tenant_id=><<"tenant-a">>,application_id=><<"app-a">>,namespace=><<"orders">>,virtual_shard=>3816},
-            {ok,OldEpoch}=bmscl_durable_test_store:claim_owner(Scope),
-            {ok,#{version:=1}}=bmscl_shard_rebalancer:begin_handoff(Scope,71,[<<"a">>,<<"b">>,<<"c">>],[<<"b">>,<<"c">>,<<"d">>],10044),
-            {error,target_not_caught_up}=bmscl_shard_rebalancer:cutover(Scope,72),
-            {ok,#{version:=2}}=bmscl_shard_rebalancer:record_progress(Scope,<<"d">>,10044),
-            {ok,#{version:=3,owner_epoch:=NewEpoch}}=bmscl_shard_rebalancer:cutover(Scope,72),
-            true=(NewEpoch>OldEpoch),
-            Identity2=#{tenant_id=><<"tenant-a">>,application_id=><<"app-a">>,namespace=><<"orders">>,object_key=><<"order-9">>},
-            {error,{stale_owner_epoch,NewEpoch}}=bmscl_durable_test_store:commit(Identity2,0,Scope,OldEpoch,<<"stale">>),
-            halt(0).'

@@ -1,0 +1,7 @@
+{application, bmscl_supervisor,
+ [{description, "BeamScale shard handoff proof fixture"},
+  {vsn, "0.0.0"},
+  {applications, [kernel, stdlib, crypto, jsx]},
+  {modules, []},
+  {licenses, ["Apache-2.0"]}
+ ]}.

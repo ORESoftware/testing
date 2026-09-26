@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  prove:
+  prove-barrier:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -20,11 +20,11 @@ jobs:
       - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
         with:
           otp-version: '27.3'
-      - name: Compile exact BeamScale fixture
+      - name: Compile handoff barrier fixture
         run: |
           mkdir -p _proof
           erlc -DTEST -o _proof proofs/beamscale-shard-handoff/bmscl_shard_handoff.erl
-      - name: Run EUnit proofs
+      - name: Run barrier EUnit proofs
         run: |
           erl -noshell -pa _proof -eval 'case eunit:test(bmscl_shard_handoff, [verbose]) of ok -> halt(0); _ -> halt(1) end.'
       - name: Verify handoff barrier scenario
@@ -37,4 +37,43 @@ jobs:
             true=bmscl_shard_handoff:can_cutover(S1),
             {ok,S2}=bmscl_shard_handoff:advance_placement_epoch(S1,72),
             [<<"a">>]=maps:get(fenced_replicas,S2),
+            halt(0).'
+
+  prove-placement-and-cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          otp-version: '27.3'
+          rebar3-version: '3.24.0'
+      - name: Assemble proof app
+        working-directory: proofs/beamscale-shard-handoff-v2
+        run: |
+          cp ../beamscale-shard-handoff/bmscl_shard_handoff.erl src/bmscl_shard_handoff.erl
+      - name: Compile and run EUnit
+        working-directory: proofs/beamscale-shard-handoff-v2
+        run: rebar3 eunit
+      - name: Verify V1 mapping and atomic fencing scenario
+        working-directory: proofs/beamscale-shard-handoff-v2
+        run: |
+          EBIN="$(find _build/test/lib/bmscl_supervisor -type d -name ebin -print -quit)"
+          JSX_EBIN="$(find _build/test/lib/jsx -type d -name ebin -print -quit)"
+          erl -noshell -pa "$EBIN" "$JSX_EBIN" -eval '
+            Identity=#{tenant_id=><<"tenant-a">>,application_id=><<"app-a">>,namespace=><<"orders">>,object_key=><<"customer-42">>},
+            {ok,3816}=bmscl_shard_placement:virtual_shard(Identity,1,65536),
+            application:set_env(bmscl_supervisor,durable_store_module,bmscl_durable_test_store),
+            ok=bmscl_durable_test_store:reset(),
+            Scope=#{tenant_id=><<"tenant-a">>,application_id=><<"app-a">>,namespace=><<"orders">>,virtual_shard=>3816},
+            {ok,OldEpoch}=bmscl_durable_test_store:claim_owner(Scope),
+            {ok,#{version:=1}}=bmscl_shard_rebalancer:begin_handoff(Scope,71,[<<"a">>,<<"b">>,<<"c">>],[<<"b">>,<<"c">>,<<"d">>],10044),
+            {error,target_not_caught_up}=bmscl_shard_rebalancer:cutover(Scope,72),
+            {ok,#{version:=2}}=bmscl_shard_rebalancer:record_progress(Scope,<<"d">>,10044),
+            {ok,#{version:=3,owner_epoch:=NewEpoch}}=bmscl_shard_rebalancer:cutover(Scope,72),
+            true=(NewEpoch>OldEpoch),
+            Identity2=#{tenant_id=><<"tenant-a">>,application_id=><<"app-a">>,namespace=><<"orders">>,object_key=><<"order-9">>},
+            {error,{stale_owner_epoch,NewEpoch}}=bmscl_durable_test_store:commit(Identity2,0,Scope,OldEpoch,<<"stale">>),
             halt(0).'

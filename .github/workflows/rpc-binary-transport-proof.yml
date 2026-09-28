@@ -4,15 +4,51 @@ on:
   pull_request:
     paths:
       - ".github/workflows/rpc-binary-transport-proof.yml"
+      - "rpc-binary-transport-proof/**"
   push:
     branches: [master]
     paths:
       - ".github/workflows/rpc-binary-transport-proof.yml"
+      - "rpc-binary-transport-proof/**"
 
 permissions:
   contents: read
 
 jobs:
+  codec_fleet_contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-interfaces
+          ref: 51e1c74f4dd0c37bfb1dd6fceb48f8e3f3484b79
+          path: sources/interfaces
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-transport
+          ref: e880c9c655478a3c34798e3a18f2a206b31de3f4
+          path: sources/transport
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/api-docs
+          ref: d437d347c6b8580eac487227fbfe3eb47c25f32b
+          path: sources/api-docs
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ORESoftware/ores-rpc-calls-http-tcp-pool.rs
+          ref: b04edbfbfdd1ec4f26a49315e46b012002228ce6
+          path: sources/rpc-pool
+          persist-credentials: false
+      - name: Prove codec and framing axes stay compatible
+        run: node rpc-binary-transport-proof/check-codec-fleet-contract.mjs
+
   ores_transport:
     runs-on: ubuntu-24.04
     timeout-minutes: 25

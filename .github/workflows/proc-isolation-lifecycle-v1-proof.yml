@@ -23,6 +23,31 @@ jobs:
       - name: Check out carrier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.88.0
+          components: rustfmt, clippy
+
+      - name: Reconstruct exact current lifecycle engine blob
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          file=proc-isolation-lifecycle-proof/src/linux_lifecycle.rs
+          test "$(git hash-object "$file")" = 81074add8713f674e6fbd34a88b34d37081982c0
+          rustfmt --edition 2024 "$file"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("proc-isolation-lifecycle-proof/src/linux_lifecycle.rs")
+          text = path.read_text()
+          old = "        file.by_ref()\n"
+          new = "        std::io::Read::by_ref(&mut file)\n"
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one bounded reader call, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+          test "$(git hash-object "$file")" = 311ff56d47eba4d228cb6c9e540e6d4c131614d8
+
       - name: Verify exact production Git blob identities
         shell: bash
         run: |
@@ -31,15 +56,9 @@ jobs:
           test "$(git hash-object "$root/.cli-flags.toml")" = cbaeed451962d48507e9a5538aae4ef899349c41
           test "$(git hash-object "$root/src/error.rs")" = 1686b8f363e3ae3215918259f7c57b0d32e8e98d
           test "$(git hash-object "$root/src/flags.rs")" = a6f4785f9cbb0b3913039b10aca69216945fee3d
-          test "$(git hash-object "$root/src/linux_lifecycle.rs")" = 81074add8713f674e6fbd34a88b34d37081982c0
+          test "$(git hash-object "$root/src/linux_lifecycle.rs")" = 311ff56d47eba4d228cb6c9e540e6d4c131614d8
           test "$(git hash-object "$root/src/linux_process_identity.rs")" = d28d9bc04c2bc5065557571b99fd3d5225a28c46
           test "$(git hash-object "$root/vendor/runner.rs")" = 9f6e895f4d961c0ca1090fc6ebf48eb0191c8f3d
-
-      - name: Install pinned Rust toolchain
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
-        with:
-          toolchain: 1.88.0
-          components: rustfmt, clippy
 
       - name: Format exact production modules
         shell: bash

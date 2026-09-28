@@ -1,3 +1,5 @@
+//! Exact-source compile and unit-test carrier for proc-isolation lifecycle v1.
+
 #![forbid(unsafe_code)]
 #![allow(clippy::needless_return)]
 

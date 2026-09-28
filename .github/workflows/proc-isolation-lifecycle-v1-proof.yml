@@ -52,7 +52,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          cargo test --manifest-path proc-isolation-lifecycle-proof/Cargo.toml --lib --locked=false
+          cargo test --manifest-path proc-isolation-lifecycle-proof/Cargo.toml --lib
 
       - name: Deny Rust and clippy warnings
         shell: bash

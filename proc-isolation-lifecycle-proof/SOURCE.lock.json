@@ -1,13 +1,15 @@
 {
   "repository": "ORESoftware/ores-proc-isolation-cli",
   "pull_request": 36,
-  "head_sha": "bbb3a13fe458e42a9f4ac96a615fd5daa690daaf",
+  "head_sha": "b79016c4a0176b11892ae87cd3db23c09a359814",
   "blobs": {
     ".cli-flags.toml": "cbaeed451962d48507e9a5538aae4ef899349c41",
     "src/error.rs": "1686b8f363e3ae3215918259f7c57b0d32e8e98d",
     "src/flags.rs": "a6f4785f9cbb0b3913039b10aca69216945fee3d",
-    "src/linux_lifecycle.rs": "81074add8713f674e6fbd34a88b34d37081982c0",
+    "src/linux_lifecycle.rs": "311ff56d47eba4d228cb6c9e540e6d4c131614d8",
     "src/linux_process_identity.rs": "d28d9bc04c2bc5065557571b99fd3d5225a28c46",
     "src/runner.rs": "9f6e895f4d961c0ca1090fc6ebf48eb0191c8f3d"
-  }
+  },
+  "carrier_base_linux_lifecycle_blob": "81074add8713f674e6fbd34a88b34d37081982c0",
+  "normalization": "rustfmt linux_lifecycle.rs, then replace file.by_ref() with std::io::Read::by_ref(&mut file)"
 }

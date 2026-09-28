@@ -53,8 +53,7 @@ boundary and must never provide tenant code with cgroup/checkpoint authority.
 
 ## Unix socket trust boundary
 
-The cooperative supervisor socket and trusted host-control socket must not share a
-writable parent directory.
+The cooperative supervisor socket and trusted host-control socket must not share a writable parent directory.
 
 ```text
 /run/beamscale-lifecycle/              root:root 0755

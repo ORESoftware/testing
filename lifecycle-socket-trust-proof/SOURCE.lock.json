@@ -1,0 +1,22 @@
+{
+  "schema_version": "ores-lifecycle-socket-trust-proof.v1",
+  "sources": {
+    "beamscale/bmscl-infra": {
+      "commit": "3a51a77c2c49449dc3e5659b5aadd5299cd1dfd3",
+      "blobs": {
+        "deploy/baremetal/nixos/bmscl-lifecycle-agent.nix": "ec1c05a79cb134b8afc42258d04e9771a8919ad0",
+        "scripts/check-lifecycle-agent-contract.mjs": "18a359a4e949548cea210e88b9b29dbf60223c29",
+        "deploy/baremetal/process-lifecycle.md": "9c255cdadb66b5088fb657e49a6bbfdab664f99c",
+        "deploy/baremetal/README.md": "46822e0078b7af393507895c8a1b2aae249b5370"
+      }
+    },
+    "scintilla-run/scintilla-infra": {
+      "commit": "2146c2ebea8f4eda0ec99117acc7b9fa3e850f3e",
+      "blobs": {
+        "fleet/nixos/scintilla-lifecycle-agent.nix": "08a90af49ce82d76a405689a41e77694f34637f8",
+        "scripts/check-lifecycle-agent-contract.mjs": "f67b2db74addf2e6283884ba54954d3cd0f3af8f",
+        "deploy/baremetal/README.md": "46a6eac8856d05d02b45575b67a544c16cdba069"
+      }
+    }
+  }
+}

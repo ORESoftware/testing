@@ -1,0 +1,13 @@
+{
+  "schema_version": "ores-lifecycle-runtime-bridge-proof.v1",
+  "sources": {
+    "beamscale/bmscl-supervisor": {
+      "commit": "7e07f820cfc294df500467a9fbbcd7e93773943e",
+      "blob": "cc88be0b215faefb047aac5fe5f43e374289f898"
+    },
+    "scintilla-run/gleam-lambda-runner": {
+      "commit": "f83e9f01ba96890387884fd68ac73a6801f92b61",
+      "blob": "4150ccc6032bde1e0942076cea050bebbd12ff35"
+    }
+  }
+}

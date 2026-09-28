@@ -1,0 +1,84 @@
+name: Lifecycle socket trust v2 proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/lifecycle-socket-trust-v2-proof.yml"
+      - "lifecycle-socket-trust-proof/**"
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/lifecycle-socket-trust-v2-proof.yml"
+      - "lifecycle-socket-trust-proof/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Verify exact production Git blob identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          root=lifecycle-socket-trust-proof/vendor
+          test "$(git hash-object "$root/beamscale/deploy/baremetal/nixos/bmscl-lifecycle-agent.nix")" = "ec1c05a79cb134b8afc42258d04e9771a8919ad0"
+          test "$(git hash-object "$root/beamscale/scripts/check-lifecycle-agent-contract.mjs")" = "18a359a4e949548cea210e88b9b29dbf60223c29"
+          test "$(git hash-object "$root/beamscale/deploy/baremetal/process-lifecycle.md")" = "9c255cdadb66b5088fb657e49a6bbfdab664f99c"
+          test "$(git hash-object "$root/beamscale/deploy/baremetal/README.md")" = "46822e0078b7af393507895c8a1b2aae249b5370"
+          test "$(git hash-object "$root/scintilla/fleet/nixos/scintilla-lifecycle-agent.nix")" = "08a90af49ce82d76a405689a41e77694f34637f8"
+          test "$(git hash-object "$root/scintilla/scripts/check-lifecycle-agent-contract.mjs")" = "f67b2db74addf2e6283884ba54954d3cd0f3af8f"
+          test "$(git hash-object "$root/scintilla/deploy/baremetal/README.md")" = "46a6eac8856d05d02b45575b67a544c16cdba069"
+
+      - name: Execute BeamScale production lifecycle contract
+        working-directory: lifecycle-socket-trust-proof/vendor/beamscale
+        run: node scripts/check-lifecycle-agent-contract.mjs
+
+      - name: Execute Scintilla production lifecycle contract
+        working-directory: lifecycle-socket-trust-proof/vendor/scintilla
+        run: node scripts/check-lifecycle-agent-contract.mjs
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: '1.95.0'
+
+      - name: Build Rust DAC probe
+        run: |
+          rustc --edition=2024 -D warnings lifecycle-socket-trust-proof/lifecycle_dac.rs -o /tmp/lifecycle-dac
+
+      - name: Prove product cannot squat trusted host socket namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_root=/tmp/ores-lifecycle-socket-trust-proof
+          sudo groupadd --system ores-lifecycle-proof
+          sudo useradd --system --no-create-home --shell /usr/sbin/nologin --gid ores-lifecycle-proof ores-lifecycle-product
+          sudo install -d -m 0755 -o root -g root "$proof_root"
+          sudo install -d -m 2770 -o ores-lifecycle-product -g ores-lifecycle-proof "$proof_root/product"
+          sudo install -d -m 0700 -o root -g root "$proof_root/host"
+
+          sudo -u ores-lifecycle-product /tmp/lifecycle-dac bind "$proof_root/product/control.sock"
+          sudo /tmp/lifecycle-dac bind "$proof_root/host/control.sock"
+
+          if sudo -u ores-lifecycle-product /tmp/lifecycle-dac remove "$proof_root/host/control.sock"; then
+            echo "product user unexpectedly removed trusted host socket" >&2
+            exit 1
+          fi
+          if sudo -u ores-lifecycle-product /tmp/lifecycle-dac bind "$proof_root/host/squat.sock"; then
+            echo "product user unexpectedly created a socket in trusted host directory" >&2
+            exit 1
+          fi
+
+          test -S "$proof_root/product/control.sock"
+          test -S "$proof_root/host/control.sock"
+          sudo rm -rf "$proof_root"

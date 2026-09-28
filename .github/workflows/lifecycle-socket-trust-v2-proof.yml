@@ -79,6 +79,6 @@ jobs:
             exit 1
           fi
 
-          test -S "$proof_root/product/control.sock"
-          test -S "$proof_root/host/control.sock"
+          sudo test -S "$proof_root/product/control.sock"
+          sudo test -S "$proof_root/host/control.sock"
           sudo rm -rf "$proof_root"

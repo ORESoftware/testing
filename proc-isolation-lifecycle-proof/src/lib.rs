@@ -5,5 +5,6 @@
 
 pub mod error;
 pub mod flags;
+pub mod lifecycle_host_guard;
 pub mod linux_lifecycle;
 pub mod linux_process_identity;

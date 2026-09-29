@@ -1,0 +1,12 @@
+{
+  "schema": "ores.common-desktop.rust-distribution/v1-proof",
+  "crates": [
+    {
+      "path": "tool",
+      "publish_required": false
+    }
+  ],
+  "consumer_policy": {
+    "direct_private_git_dependency_allowed": false
+  }
+}

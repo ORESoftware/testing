@@ -16,7 +16,8 @@ fn run() -> Result<(), String> {
     let manifest_path = env::args()
         .nth(1)
         .unwrap_or_else(|| "distribution/rust-packages.json".to_owned());
-    let root = env::current_dir().map_err(|error| format!("cannot read current directory: {error}"))?;
+    let root =
+        env::current_dir().map_err(|error| format!("cannot read current directory: {error}"))?;
     let metadata = cargo_metadata()?;
     let distribution_text = fs::read_to_string(&manifest_path)
         .map_err(|error| format!("cannot read {manifest_path}: {error}"))?;
@@ -42,7 +43,11 @@ fn cargo_metadata() -> Result<Value, String> {
     return Ok(metadata);
 }
 
-fn validate_inventory(root: &Path, metadata: &Value, distribution: &Value) -> Result<usize, String> {
+fn validate_inventory(
+    root: &Path,
+    metadata: &Value,
+    distribution: &Value,
+) -> Result<usize, String> {
     let workspace_ids = string_array(metadata, "workspace_members")?;
     let packages = metadata
         .get("packages")
@@ -65,9 +70,9 @@ fn validate_inventory(root: &Path, metadata: &Value, distribution: &Value) -> Re
         .map_err(|error| format!("cannot canonicalize workspace root: {error}"))?;
     let mut workspace_paths = BTreeSet::new();
     for id in workspace_ids {
-        let manifest = package_by_id
-            .get(id)
-            .ok_or_else(|| format!("workspace member {id} is missing from cargo metadata packages"))?;
+        let manifest = package_by_id.get(id).ok_or_else(|| {
+            format!("workspace member {id} is missing from cargo metadata packages")
+        })?;
         let manifest = PathBuf::from(manifest);
         let parent = manifest.parent().ok_or_else(|| {
             format!(
@@ -80,7 +85,9 @@ fn validate_inventory(root: &Path, metadata: &Value, distribution: &Value) -> Re
             .map_err(|error| format!("cannot canonicalize workspace member {parent:?}: {error}"))?;
         let relative = canonical_parent
             .strip_prefix(&canonical_root)
-            .map_err(|_| format!("workspace member escapes repository root: {canonical_parent:?}"))?;
+            .map_err(|_| {
+                format!("workspace member escapes repository root: {canonical_parent:?}")
+            })?;
         workspace_paths.insert(normalize_path(relative));
     }
 
@@ -91,7 +98,10 @@ fn validate_inventory(root: &Path, metadata: &Value, distribution: &Value) -> Re
     let mut declared_paths = BTreeSet::new();
     for row in crates {
         let path = required_string(row, "path", "distribution crate")?;
-        if path.is_empty() || Path::new(path).is_absolute() || path.split('/').any(|part| part == "..") {
+        if path.is_empty()
+            || Path::new(path).is_absolute()
+            || path.split('/').any(|part| part == "..")
+        {
             return Err(format!("invalid distribution crate path: {path}"));
         }
         if !declared_paths.insert(path.to_owned()) {
@@ -172,8 +182,16 @@ mod tests {
         let root = env::temp_dir().join(format!("ores-rust-distribution-{nonce}"));
         fs::create_dir_all(root.join("infra/rust")).unwrap();
         fs::create_dir_all(root.join("cli/rust")).unwrap();
-        fs::write(root.join("infra/rust/Cargo.toml"), "[package]\nname='infra'\nversion='0.1.0'\n").unwrap();
-        fs::write(root.join("cli/rust/Cargo.toml"), "[package]\nname='cli'\nversion='0.1.0'\n").unwrap();
+        fs::write(
+            root.join("infra/rust/Cargo.toml"),
+            "[package]\nname='infra'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("cli/rust/Cargo.toml"),
+            "[package]\nname='cli'\nversion='0.1.0'\n",
+        )
+        .unwrap();
         return root;
     }
 

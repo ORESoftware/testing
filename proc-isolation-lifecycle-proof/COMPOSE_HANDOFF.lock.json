@@ -1,0 +1,22 @@
+{
+  "repository": "ORESoftware/ores-proc-isolation-cli",
+  "pull_request": 39,
+  "head_sha": "09b6488e951462f27d115ca2a1bcb5b826bd4a7c",
+  "consumer": "ORESoftware/ores-compose#340",
+  "consumer_head_sha": "e7b77e086984912ebf8e8ddecd46919973cacda6",
+  "blobs": {
+    ".cli-flags.toml": "cbaeed451962d48507e9a5538aae4ef899349c41",
+    "src/flags.rs": "a6f4785f9cbb0b3913039b10aca69216945fee3d",
+    "src/runner.rs": "9f6e895f4d961c0ca1090fc6ebf48eb0191c8f3d",
+    "tests/compose_policy_digest_handoff.rs": "9335ccd866e9b6be7c248dc470ff4b069a20d815"
+  },
+  "argv": [
+    "--target-env-stdin",
+    "--config-sha256",
+    "<sha256>",
+    "run",
+    "target",
+    "--config",
+    "<policy>"
+  ]
+}

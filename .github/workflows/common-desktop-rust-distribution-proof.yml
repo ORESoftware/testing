@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git hash-object proof/common-desktop-rust-distribution/tool/src/main.rs)"
-          expected="c5fc26a504dc46b5be40fc53e0584d4ea33d6d6f"
+          expected="0dade6e4d5af1b8514b3e112379c7bba53517088"
           test "$actual" = "$expected"
           printf 'verified production blob %s\n' "$actual"
 

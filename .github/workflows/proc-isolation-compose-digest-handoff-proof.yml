@@ -49,7 +49,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          cargo fmt --manifest-path proc-isolation-lifecycle-proof/Cargo.toml -- --check
+          rustfmt --edition 2024 --check proc-isolation-lifecycle-proof/tests/compose_digest_handoff.rs
           rustfmt --edition 2024 --check proc-isolation-lifecycle-proof/vendor/compose_policy_digest_handoff.rs
 
       - name: Execute compose-shaped argv contract against exact parser

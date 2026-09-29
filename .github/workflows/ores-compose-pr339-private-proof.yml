@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - proof/ores-compose-pr339-private-checkout
+  pull_request:
+    branches:
+      - master
+    paths:
+      - .github/workflows/ores-compose-pr339-private-proof.yml
   workflow_dispatch:
 
 permissions:

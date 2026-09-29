@@ -1,0 +1,66 @@
+name: ores-compose pr339 private exact-head proof
+
+on:
+  push:
+    branches:
+      - proof/ores-compose-pr339-private-checkout
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ores-compose-pr339-private-proof
+  cancel-in-progress: false
+
+jobs:
+  exact-head-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      EXPECTED_SHA: de9159245f7a971b24daa3b86e46eb205fa1075e
+      ORES_CLI_READ_TOKEN: ${{ secrets.ORES_CLI_READ_TOKEN }}
+    steps:
+      - name: Require scoped sibling-repository read token
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${ORES_CLI_READ_TOKEN:-}"
+
+      - name: Check out exact private ores-compose candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-compose
+          ref: ${{ env.EXPECTED_SHA }}
+          path: ores-compose
+          token: ${{ secrets.ORES_CLI_READ_TOKEN }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Assert exact source identity
+        working-directory: ores-compose
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git hash-object tests/cli_relative_config_paths.rs)" = "caf2d59b4e84de79fa3888c8c7e54f99b155c2c9"
+
+      - name: Install reviewed Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.1
+          rustc --version | grep -F 'rustc 1.98.1'
+
+      - name: Format
+        working-directory: ores-compose
+        run: cargo fmt --all --check
+
+      - name: Deny warnings
+        working-directory: ores-compose
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run exact relative-config regression
+        working-directory: ores-compose
+        run: cargo test --locked --test cli_relative_config_paths

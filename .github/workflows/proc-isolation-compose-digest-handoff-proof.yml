@@ -41,8 +41,8 @@ jobs:
           test "$(git hash-object "$root/.cli-flags.toml")" = cbaeed451962d48507e9a5538aae4ef899349c41
           test "$(git hash-object "$root/src/flags.rs")" = a6f4785f9cbb0b3913039b10aca69216945fee3d
           test "$(git hash-object "$root/vendor/runner.rs")" = 9f6e895f4d961c0ca1090fc6ebf48eb0191c8f3d
-          test "$(git hash-object "$root/vendor/compose_policy_digest_handoff.rs")" = 9335ccd866e9b6be7c248dc470ff4b069a20d815
-          jq -e '.head_sha == "09b6488e951462f27d115ca2a1bcb5b826bd4a7c"' "$root/COMPOSE_HANDOFF.lock.json"
+          test "$(git hash-object "$root/vendor/compose_policy_digest_handoff.rs")" = 5f180a03c45ae484147a22dc2256d95003786fc3
+          jq -e '.head_sha == "8cc242d78d1371ba6c6a2c19a770a6be2dece7d9"' "$root/COMPOSE_HANDOFF.lock.json"
           jq -e '.consumer_head_sha == "e7b77e086984912ebf8e8ddecd46919973cacda6"' "$root/COMPOSE_HANDOFF.lock.json"
 
       - name: Reconstruct exact current lifecycle engine blob

@@ -1,0 +1,108 @@
+name: Sidecar live cgroup-v2 freeze proof
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/sidecar-live-cgroup-v2-proof.yml
+      - sidecar-live-cgroup-proof/**
+  push:
+    branches:
+      - master
+    paths:
+      - .github/workflows/sidecar-live-cgroup-v2-proof.yml
+      - sidecar-live-cgroup-proof/**
+
+permissions:
+  contents: read
+
+jobs:
+  live-cgroup-v2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out funded proof carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install source Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: '1.95.0'
+
+      - name: Fetch exact sidecar head and verify blob identity
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          source_dir="$RUNNER_TEMP/ores-otel-sidecar"
+          git init "$source_dir"
+          git -C "$source_dir" remote add origin https://github.com/ores-otel/ores-otel-sidecar.rs.git
+          git -C "$source_dir" fetch --depth=1 origin 1fa29cf7879bff0f147d3620ee472f4aa8b09b55
+          git -C "$source_dir" checkout --detach FETCH_HEAD
+
+          test "$(git -C "$source_dir" rev-parse HEAD)" = 1fa29cf7879bff0f147d3620ee472f4aa8b09b55
+          test "$(git -C "$source_dir" hash-object src/adapters/linux_process_lifecycle.rs)" = 3dad50d79f2582c10ab329365bcc6072dab480cc
+          test "$(git -C "$source_dir" hash-object src/adapters/process_lifecycle_freeze.rs)" = 7d40e07d88cf059e6156c094f544736bfc3f3829
+          test "$(git -C "$source_dir" hash-object src/lib.rs)" = 46df8b5a3382737a880659f2c12be72b99991a85
+
+          mkdir -p "$source_dir/examples"
+          cp sidecar-live-cgroup-proof/live_cgroup_v2_proof.rs \
+            "$source_dir/examples/live_cgroup_v2_proof.rs"
+          echo "SOURCE_DIR=$source_dir" >> "$GITHUB_ENV"
+
+      - name: Build proof against exact production crate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cargo build \
+            --manifest-path "$SOURCE_DIR/Cargo.toml" \
+            --locked \
+            --example live_cgroup_v2_proof
+
+      - name: Prove real kernel freeze and thaw
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
+          test -f /sys/fs/cgroup/cgroup.controllers
+          test -f /sys/fs/cgroup/cgroup.freeze
+
+          cgroup="/sys/fs/cgroup/ores-sidecar-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          counter="$RUNNER_TEMP/live-cgroup-counter"
+          writer_pid=""
+
+          cleanup() {
+            set +e
+            if sudo test -e "$cgroup/cgroup.freeze"; then
+              echo 0 | sudo tee "$cgroup/cgroup.freeze" >/dev/null
+            fi
+            if [ -n "$writer_pid" ]; then
+              kill "$writer_pid" 2>/dev/null || true
+              wait "$writer_pid" 2>/dev/null || true
+            fi
+            sudo rmdir "$cgroup" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          sudo mkdir "$cgroup"
+          : > "$counter"
+          python3 -u -c 'import pathlib,sys,time; p=pathlib.Path(sys.argv[1]); f=p.open("ab", buffering=0); [(f.write(b"x\\n"), time.sleep(0.02)) for _ in iter(int, 1)]' "$counter" &
+          writer_pid="$!"
+
+          echo "$writer_pid" | sudo tee "$cgroup/cgroup.procs" >/dev/null
+          grep -F "/$(basename "$cgroup")" "/proc/$writer_pid/cgroup"
+
+          for _ in $(seq 1 50); do
+            if [ -s "$counter" ]; then
+              break
+            fi
+            sleep 0.02
+          done
+          test -s "$counter"
+
+          sudo env \
+            ORES_LIVE_CGROUP="$cgroup" \
+            ORES_LIVE_COUNTER="$counter" \
+            "$SOURCE_DIR/target/debug/examples/live_cgroup_v2_proof"
+
+          test "$(cat "$cgroup/cgroup.freeze")" = 0
+          grep -q '^frozen 0$' "$cgroup/cgroup.events"
+          kill -0 "$writer_pid"

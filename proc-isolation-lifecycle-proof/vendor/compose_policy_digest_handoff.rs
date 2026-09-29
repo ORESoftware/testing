@@ -1,5 +1,7 @@
 //! Consumer-shaped regression for the ores-compose -> ores-proc-isolation policy handoff.
 
+#![allow(clippy::needless_return)]
+
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fs;

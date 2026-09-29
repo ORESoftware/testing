@@ -1,0 +1,11 @@
+{
+  "repository": "ores-otel/ores-otel-sidecar.rs",
+  "pull_request": 45,
+  "head_sha": "1fa29cf7879bff0f147d3620ee472f4aa8b09b55",
+  "blobs": {
+    "src/adapters/linux_process_lifecycle.rs": "3dad50d79f2582c10ab329365bcc6072dab480cc",
+    "src/adapters/process_lifecycle_freeze.rs": "7d40e07d88cf059e6156c094f544736bfc3f3829",
+    "src/lib.rs": "46df8b5a3382737a880659f2c12be72b99991a85"
+  },
+  "proof": "real cgroup-v2 target process; kernel-confirmed freeze; observable work stops while frozen and resumes after thaw"
+}

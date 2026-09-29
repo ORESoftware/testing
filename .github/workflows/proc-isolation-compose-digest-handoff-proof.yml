@@ -45,6 +45,17 @@ jobs:
           jq -e '.head_sha == "09b6488e951462f27d115ca2a1bcb5b826bd4a7c"' "$root/COMPOSE_HANDOFF.lock.json"
           jq -e '.consumer_head_sha == "e7b77e086984912ebf8e8ddecd46919973cacda6"' "$root/COMPOSE_HANDOFF.lock.json"
 
+      - name: Reconstruct exact current lifecycle engine blob
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          file=proc-isolation-lifecycle-proof/src/linux_lifecycle.rs
+          test "$(git hash-object "$file")" = 81074add8713f674e6fbd34a88b34d37081982c0
+          rustfmt --edition 2024 "$file"
+          test "$(grep -c '        file.by_ref()' "$file")" = 1
+          perl -0pi -e 's/        file\.by_ref\(\)\n/        std::io::Read::by_ref\(&mut file\)\n/' "$file"
+          test "$(git hash-object "$file")" = 311ff56d47eba4d228cb6c9e540e6d4c131614d8
+
       - name: Format carrier assertion and exact product test
         shell: bash
         run: |

@@ -1,5 +1,7 @@
 //! Exact-parser proof for the ores-compose process-isolation handoff.
 
+#![allow(clippy::needless_return)]
+
 use proc_isolation_lifecycle_proof::flags::{CliCommand, parse_from};
 use std::error::Error;
 use std::path::PathBuf;

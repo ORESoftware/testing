@@ -38,10 +38,17 @@ jobs:
           git -C "$source_dir" fetch --depth=1 origin 1fa29cf7879bff0f147d3620ee472f4aa8b09b55
           git -C "$source_dir" checkout --detach FETCH_HEAD
 
-          test "$(git -C "$source_dir" rev-parse HEAD)" = 1fa29cf7879bff0f147d3620ee472f4aa8b09b55
-          test "$(git -C "$source_dir" hash-object src/adapters/linux_process_lifecycle.rs)" = 3dad50d79f2582c10ab329365bcc6072dab480cc
-          test "$(git -C "$source_dir" hash-object src/adapters/process_lifecycle_freeze.rs)" = 7d40e07d88cf059e6156c094f544736bfc3f3829
-          test "$(git -C "$source_dir" hash-object src/lib.rs)" = 46df8b5a3382737a880659f2c12be72b99991a85
+          actual_head="$(git -C "$source_dir" rev-parse HEAD)"
+          linux_blob="$(git -C "$source_dir" hash-object src/adapters/linux_process_lifecycle.rs)"
+          freeze_blob="$(git -C "$source_dir" hash-object src/adapters/process_lifecycle_freeze.rs)"
+          lib_blob="$(git -C "$source_dir" hash-object src/lib.rs)"
+          printf 'source_head=%s\nlinux_blob=%s\nfreeze_blob=%s\nlib_blob=%s\n' \
+            "$actual_head" "$linux_blob" "$freeze_blob" "$lib_blob"
+
+          test "$actual_head" = 1fa29cf7879bff0f147d3620ee472f4aa8b09b55
+          test "$linux_blob" = 3dad50d79f2582c10ab329365bcc6072dab480cc
+          test "$freeze_blob" = d816d418477d4bbd4e0f1e099d62973e9aed92f7
+          test "$lib_blob" = 46df8b5a3382737a880659f2c12be72b99991a85
 
           mkdir -p "$source_dir/examples"
           cp sidecar-live-cgroup-proof/live_cgroup_v2_proof.rs \
@@ -84,7 +91,7 @@ jobs:
 
           sudo mkdir "$cgroup"
           : > "$counter"
-          python3 -u -c 'import pathlib,sys,time; p=pathlib.Path(sys.argv[1]); f=p.open("ab", buffering=0); [(f.write(b"x\\n"), time.sleep(0.02)) for _ in iter(int, 1)]' "$counter" &
+          python3 -u -c 'import pathlib,sys,time; f=pathlib.Path(sys.argv[1]).open("ab", buffering=0); exec("while True:\\n f.write(b\\\"x\\\\n\\\")\\n time.sleep(0.02)")' "$counter" &
           writer_pid="$!"
 
           echo "$writer_pid" | sudo tee "$cgroup/cgroup.procs" >/dev/null

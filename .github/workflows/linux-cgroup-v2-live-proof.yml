@@ -1,0 +1,85 @@
+name: Linux cgroup v2 live proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/linux-cgroup-v2-live-proof.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-freeze-thaw:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Prove stateful child freezes and resumes in a dedicated cgroup v2 scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f /sys/fs/cgroup/cgroup.controllers
+          scope="/sys/fs/cgroup/ores-live-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          counter="${RUNNER_TEMP}/ores-cgroup-counter"
+          printf '0\n' > "$counter"
+
+          cleanup() {
+            set +e
+            if [[ -n "${child:-}" ]]; then
+              sudo sh -c "echo 0 > '$scope/cgroup.freeze'" 2>/dev/null || true
+              kill "$child" 2>/dev/null || true
+              wait "$child" 2>/dev/null || true
+            fi
+            sudo rmdir "$scope" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          sudo mkdir "$scope"
+          test -f "$scope/cgroup.freeze"
+          test -f "$scope/cgroup.events"
+
+          bash -c '
+            set -euo pipefail
+            counter="$1"
+            n=0
+            while :; do
+              n=$((n + 1))
+              printf "%s\n" "$n" > "$counter"
+              sleep 0.02
+            done
+          ' _ "$counter" &
+          child=$!
+          sudo sh -c "echo '$child' > '$scope/cgroup.procs'"
+
+          sleep 0.3
+          before=$(cat "$counter")
+          test "$before" -gt 0
+
+          sudo sh -c "echo 1 > '$scope/cgroup.freeze'"
+          for _ in $(seq 1 100); do
+            if grep -q '^frozen 1$' "$scope/cgroup.events"; then
+              break
+            fi
+            sleep 0.02
+          done
+          grep -q '^frozen 1$' "$scope/cgroup.events"
+          frozen_a=$(cat "$counter")
+          sleep 0.5
+          frozen_b=$(cat "$counter")
+          test "$frozen_a" -eq "$frozen_b"
+          kill -0 "$child"
+
+          sudo sh -c "echo 0 > '$scope/cgroup.freeze'"
+          for _ in $(seq 1 100); do
+            if grep -q '^frozen 0$' "$scope/cgroup.events"; then
+              break
+            fi
+            sleep 0.02
+          done
+          grep -q '^frozen 0$' "$scope/cgroup.events"
+          sleep 0.3
+          resumed=$(cat "$counter")
+          test "$resumed" -gt "$frozen_b"
+
+          printf 'before=%s frozen=%s resumed=%s\n' "$before" "$frozen_b" "$resumed"

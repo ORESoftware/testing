@@ -1,3 +1,5 @@
-node_modules
-.idea
+/target
+/.direnv
+/.env
 *.log
+.DS_Store

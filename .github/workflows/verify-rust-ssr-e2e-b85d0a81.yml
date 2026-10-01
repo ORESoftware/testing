@@ -1,0 +1,89 @@
+name: Verify exact rust-ssr-e2e collector head
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-rust-ssr-e2e-b85d0a81
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: >-
+      github.actor == 'ORESoftware' &&
+      github.event.pull_request.head.repo.full_name == 'ORESoftware/testing' &&
+      github.head_ref == 'agent/verify-rust-ssr-e2e-b85d0a81'
+    runs-on: sonus-ci
+    timeout-minutes: 25
+    steps:
+      - name: Clone, isolate, and validate the exact private head
+        shell: bash
+        run: |
+          set -euo pipefail
+          readonly target_repo='rust-ssr-demos/rust-ssr-e2e'
+          readonly target_sha='b85d0a8136bf296dbc4eb2656219d681aa285ac7'
+          readonly target_url="https://github.com/${target_repo}.git"
+
+          test "$GITHUB_ACTOR" = 'ORESoftware'
+          test "$GITHUB_HEAD_REF" = 'agent/verify-rust-ssr-e2e-b85d0a81'
+          test "$RUNNER_OS" = 'Linux'
+          test "$(id -u)" != 0
+          test ! -e /var/run/docker.sock
+          test ! -e /var/run/secrets/kubernetes.io/serviceaccount/token
+          command -v bash >/dev/null
+          command -v git >/dev/null
+          command -v node >/dev/null
+          command -v npm >/dev/null
+
+          node_major="$(node -p 'Number(process.versions.node.split(`.`)[0])')"
+          test "$node_major" -ge 20
+
+          work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rust-ssr-exact-verify.XXXXXX")"
+          chmod 700 "$work"
+          cleanup() {
+            unset GH_TOKEN GITHUB_TOKEN GIT_ASKPASS GIT_ASKPASS_REQUIRE
+            unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+            rm -rf "$work"
+          }
+          trap cleanup EXIT
+
+          if command -v gh >/dev/null 2>&1 && gh auth status --hostname github.com >/dev/null 2>&1; then
+            gh auth setup-git --hostname github.com >/dev/null 2>&1
+          fi
+
+          git init -q "$work/repository"
+          git -C "$work/repository" remote add origin "$target_url"
+          GIT_TERMINAL_PROMPT=0 \
+            git -C "$work/repository" fetch --no-tags --depth=1 origin "$target_sha"
+          git -C "$work/repository" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$work/repository" rev-parse HEAD)" = "$target_sha"
+          test -z "$(git -C "$work/repository" status --porcelain=v1 --untracked-files=all)"
+
+          git -C "$work/repository" remote remove origin
+          rm -rf "$work/repository/.git"
+          install -d -m 700 "$work/home" "$work/tmp"
+
+          env -i \
+            HOME="$work/home" \
+            TMPDIR="$work/tmp" \
+            PATH="$PATH" \
+            LANG='C.UTF-8' \
+            LC_ALL='C.UTF-8' \
+            CI='true' \
+            NO_COLOR='1' \
+            NODE_OPTIONS='--unhandled-rejections=strict' \
+            bash -c '
+              set -euo pipefail
+              cd "$1"
+              node --version
+              npm --version
+              npm run check
+              npm test
+            ' _ "$work/repository"
+
+          printf 'VERIFIED %s@%s\n' "$target_repo" "$target_sha"

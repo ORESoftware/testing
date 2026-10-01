@@ -1,0 +1,60 @@
+name: Meta-Agent Control Plane CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - incubator/meta-agent-control-plane
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+
+      - name: Generate locked dependency graph
+        run: cargo +1.97.1 generate-lockfile
+
+      - name: Format
+        run: cargo +1.97.1 fmt --check
+
+      - name: Clippy
+        run: cargo +1.97.1 clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo +1.97.1 test --locked --all-targets --all-features
+
+      - name: Contract fixtures
+        run: python3 scripts/verify_contract.py
+
+      - name: Dashboard JavaScript syntax
+        run: node --check scripts/dashboard.js
+
+      - name: Conflict markers and whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          if git grep -nE '^(<<<<<<<|=======|>>>>>>>)'; then
+            echo 'Conflict markers found.' >&2
+            exit 1
+          fi
+
+      - name: OCI build
+        run: docker build -t meta-agent-control-plane:${{ github.sha }} .

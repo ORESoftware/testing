@@ -1,0 +1,179 @@
+name: Four-org repository bootstrap v3
+
+on:
+  push:
+    branches:
+      - agent/bootstrap-four-orgs-20260804
+    paths:
+      - .github/workflows/four-org-bootstrap-v3.yml
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: four-org-repository-bootstrap-v3
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BOOTSTRAP_BRANCH: agent/bootstrap-four-orgs-20260804
+      BOOTSTRAP_ROOT: /tmp/four-org-bootstrap-v3
+      GIT_TERMINAL_PROMPT: "0"
+    steps:
+      - name: Check out bootstrap branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/bootstrap-four-orgs-20260804
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate one-run encryption key
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out /tmp/bootstrap-private.pem
+          openssl pkey -in /tmp/bootstrap-private.pem -pubout -out /tmp/bootstrap-public.pem
+
+      - name: Publish one-run public key
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-org-bootstrap-public-key-v3
+          path: /tmp/bootstrap-public.pem
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Wait for encrypted binary payload
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          found=0
+          for attempt in $(seq 1 360); do
+            git fetch --quiet origin "$BOOTSTRAP_BRANCH"
+            ref="origin/$BOOTSTRAP_BRANCH"
+            if git cat-file -e "$ref:.bootstrap-v3/payload.enc" 2>/dev/null \
+              && git cat-file -e "$ref:.bootstrap-v3/bundle-manifest.json" 2>/dev/null; then
+              found=1
+              break
+            fi
+            sleep 5
+          done
+          [[ "$found" == "1" ]] || { echo "Encrypted binary payload was not delivered before timeout" >&2; exit 1; }
+
+      - name: Decrypt credentials and source snapshots
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ref="origin/$BOOTSTRAP_BRANCH"
+          git show "$ref:.bootstrap-v3/payload.enc" > /tmp/payload.enc
+          openssl pkeyutl -decrypt \
+            -inkey /tmp/bootstrap-private.pem \
+            -in /tmp/payload.enc \
+            -out /tmp/payload.json \
+            -pkeyopt rsa_padding_mode:oaep \
+            -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256
+
+          GH_PAT="$(jq -er '.gh_pat' /tmp/payload.json)"
+          BUNDLE_KEY_B64="$(jq -er '.bundle_key_b64' /tmp/payload.json)"
+          BUNDLE_NONCE_B64="$(jq -er '.bundle_nonce_b64' /tmp/payload.json)"
+          BUNDLE_SHA256="$(jq -er '.bundle_sha256' /tmp/payload.json)"
+          echo "::add-mask::$GH_PAT"
+          echo "::add-mask::$BUNDLE_KEY_B64"
+          echo "::add-mask::$BUNDLE_NONCE_B64"
+
+          chunks="$(git show "$ref:.bootstrap-v3/bundle-manifest.json" | jq -er '.chunks')"
+          encrypted_sha="$(git show "$ref:.bootstrap-v3/bundle-manifest.json" | jq -er '.encrypted_sha256')"
+          : > /tmp/bootstrap-bundle.enc
+          for index in $(seq 0 $((chunks - 1))); do
+            part="$(printf '.bootstrap-v3/bundle.part.%03d' "$index")"
+            git show "$ref:$part" >> /tmp/bootstrap-bundle.enc
+          done
+          echo "$encrypted_sha  /tmp/bootstrap-bundle.enc" | sha256sum --check --status
+
+          export BUNDLE_KEY_B64 BUNDLE_NONCE_B64
+          node <<'NODE'
+          const crypto = require('node:crypto');
+          const fs = require('node:fs');
+          const key = Buffer.from(process.env.BUNDLE_KEY_B64, 'base64');
+          const nonce = Buffer.from(process.env.BUNDLE_NONCE_B64, 'base64');
+          const encrypted = fs.readFileSync('/tmp/bootstrap-bundle.enc');
+          if (encrypted.length < 17) throw new Error('encrypted bundle is too short');
+          const tag = encrypted.subarray(encrypted.length - 16);
+          const ciphertext = encrypted.subarray(0, encrypted.length - 16);
+          const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
+          decipher.setAuthTag(tag);
+          const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+          fs.writeFileSync('/tmp/bootstrap-bundle.tar.xz', plaintext, { mode: 0o600 });
+          NODE
+          echo "$BUNDLE_SHA256  /tmp/bootstrap-bundle.tar.xz" | sha256sum --check --status
+
+          rm -rf "$BOOTSTRAP_ROOT"
+          mkdir -p "$BOOTSTRAP_ROOT"
+          tar -xJf /tmp/bootstrap-bundle.tar.xz -C "$BOOTSTRAP_ROOT"
+          bundle_dir="$BOOTSTRAP_ROOT/github-org-bootstrap-2026-08-04"
+          test -x "$bundle_dir/publish-all.sh"
+          test -x "$bundle_dir/verify.sh"
+          test -f "$bundle_dir/manifest.json"
+          "$bundle_dir/verify.sh"
+
+          {
+            echo "GH_TOKEN=$GH_PAT"
+            echo "BUNDLE_DIR=$bundle_dir"
+          } >> "$GITHUB_ENV"
+          shred -u /tmp/payload.json /tmp/payload.enc /tmp/bootstrap-private.pem 2>/dev/null || rm -f /tmp/payload.json /tmp/payload.enc /tmp/bootstrap-private.pem
+
+      - name: Verify token and publish repositories and pull requests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "::add-mask::$GH_TOKEN"
+          gh api user --jq '.login' > /tmp/authenticated-login.txt
+          for org in apostille-me evento-globolo hacker-house-medellin embedded-alerts; do
+            gh api "orgs/$org" --jq '.login' >/dev/null
+          done
+          "$BUNDLE_DIR/publish-all.sh" 2>&1 | tee /tmp/four-org-publish.log
+
+      - name: Build publication report
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          report=/tmp/four-org-publication-report.json
+          if [[ -n "${GH_TOKEN:-}" && -f "${BUNDLE_DIR:-/nonexistent}/manifest.json" ]]; then
+            jq -n --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{generated_at:$generated_at,repositories:[]}' > "$report"
+            while IFS= read -r full; do
+              repo_json="$(gh repo view "$full" --json nameWithOwner,url,visibility,defaultBranchRef 2>/dev/null || echo '{}')"
+              pr_json="$(gh pr list --repo "$full" --state all --limit 20 --json number,title,state,isDraft,url,headRefName,baseRefName,headRefOid 2>/dev/null || echo '[]')"
+              jq --arg full "$full" --argjson repo "$repo_json" --argjson prs "$pr_json" \
+                '.repositories += [{full_name:$full,repository:$repo,pull_requests:$prs}]' "$report" > "$report.next"
+              mv "$report.next" "$report"
+            done < <(jq -r '.repositories | sort_by(.publish_order)[] | .full_name' "$BUNDLE_DIR/manifest.json")
+          else
+            jq -n --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{generated_at:$generated_at,repositories:[],error:"credentials or manifest unavailable"}' > "$report"
+          fi
+
+      - name: Upload publication evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-org-bootstrap-publication-evidence-v3
+          path: |
+            /tmp/four-org-publish.log
+            /tmp/four-org-publication-report.json
+            /tmp/authenticated-login.txt
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Remove bootstrap branch
+        if: always() && env.GH_TOKEN != ''
+        shell: bash
+        run: |
+          set +e
+          echo "::add-mask::$GH_TOKEN"
+          gh api --method DELETE "repos/ORESoftware/testing/git/refs/heads/$BOOTSTRAP_BRANCH" >/dev/null 2>&1
+          exit 0

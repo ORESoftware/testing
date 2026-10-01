@@ -1,0 +1,51 @@
+[package]
+name = "meta-agent-control-plane"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+description = "Single-binary Rust control plane for observable, reflective AI agents"
+license = "MIT"
+repository = "https://github.com/meta-agents-demo/meta-agent-control-plane.rs"
+keywords = ["agents", "ai", "metacognition", "observability", "leptos"]
+categories = ["web-programming::http-server", "development-tools"]
+publish = false
+
+[dependencies]
+axum = { version = "0.8.9", features = ["http1", "http2", "json", "macros", "tokio", "ws"] }
+chrono = { version = "0.4", features = ["clock", "serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+futures-util = { version = "0.3", features = ["sink"] }
+leptos = { version = "0.8.20", default-features = false, features = ["ssr"] }
+lru = "0.16"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+subtle = "2.6"
+thiserror = "2"
+tokio = { version = "~1.51", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
+tower-http = { version = "0.6", features = ["cors", "limit", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.30"
+tower = { version = "0.5", features = ["util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

@@ -1,0 +1,25 @@
+[package]
+name = "rust-ssr-coexistence-proof"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+publish = false
+description = "Public generic proof that Maud, Leptos SSR, and Dioxus SSR share one Axum listener"
+license = "MIT"
+
+[dependencies]
+axum = "=0.8.9"
+dioxus = { version = "=0.7.9", default-features = false, features = ["macro", "html", "signals", "hooks"] }
+dioxus-ssr = "=0.7.9"
+leptos = { version = "=0.8.20", features = ["ssr"] }
+maud = "=0.27.0"
+tokio = { version = "=1.53.1", features = ["full"] }
+uuid = { version = "=1.24.0", features = ["v4"] }
+
+[dev-dependencies]
+reqwest = { version = "=0.13.1", default-features = false, features = ["rustls", "webpki-roots"] }
+serde_json = "=1.0.151"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

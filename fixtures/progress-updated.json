@@ -1,0 +1,22 @@
+{
+  "protocol_version": "v1",
+  "event_id": "018f5c8a-d5a7-7f7c-8d61-84f55a35fe91",
+  "occurred_at": "2026-07-30T20:00:00Z",
+  "agent": {
+    "agent_id": "review-agent",
+    "provider": "anthropic",
+    "model": "claude",
+    "instance_id": "local-daemon-1"
+  },
+  "session_id": "run-42",
+  "correlation_id": "goal-17",
+  "sequence": 8,
+  "kind": "progress_updated",
+  "data": {
+    "task_id": "task-semantic-merge",
+    "progress": 0.65,
+    "summary": "Reconciled protocol and state semantics.",
+    "blocker": null,
+    "next_action": "Run the transport conformance suite."
+  }
+}

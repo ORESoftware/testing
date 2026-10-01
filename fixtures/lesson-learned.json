@@ -1,0 +1,28 @@
+{
+  "protocol_version": "v1",
+  "event_id": "018f5c8a-d5a7-7f7c-8d61-84f55a35fe93",
+  "occurred_at": "2026-07-30T20:00:02Z",
+  "agent": {
+    "agent_id": "review-agent",
+    "provider": "openai",
+    "model": "gpt",
+    "instance_id": "worker-1"
+  },
+  "session_id": "run-42",
+  "kind": "lesson_learned",
+  "data": {
+    "lesson_id": "lesson-semantic-conflicts",
+    "statement": "Resolve conflicts by preserving compatible invariants and adding regression tests.",
+    "confidence": 0.9,
+    "source_task_id": "task-semantic-merge",
+    "evidence": [
+      {
+        "kind": "test",
+        "reference": "store::tests::stale_task_definition_does_not_replace_a_newer_authoritative_definition",
+        "summary": "The reducer preserves the newer authoritative task definition."
+      }
+    ],
+    "tags": ["git", "merge", "state-machine"],
+    "applicability": "Concurrent edits to protocol, reducer, or generated contract artifacts."
+  }
+}

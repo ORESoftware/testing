@@ -1,0 +1,124 @@
+name: RPC binary transport proof
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/rpc-binary-transport-proof.yml"
+      - "rpc-binary-transport-proof/**"
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/rpc-binary-transport-proof.yml"
+      - "rpc-binary-transport-proof/**"
+
+permissions:
+  contents: read
+
+jobs:
+  codec_fleet_contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-interfaces
+          ref: 51e1c74f4dd0c37bfb1dd6fceb48f8e3f3484b79
+          path: sources/interfaces
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-transport
+          ref: e880c9c655478a3c34798e3a18f2a206b31de3f4
+          path: sources/transport
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/api-docs
+          ref: d437d347c6b8580eac487227fbfe3eb47c25f32b
+          path: sources/api-docs
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ORESoftware/ores-rpc-calls-http-tcp-pool.rs
+          ref: b04edbfbfdd1ec4f26a49315e46b012002228ce6
+          path: sources/rpc-pool
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+      - name: Prove codec and framing axes stay compatible
+        run: node rpc-binary-transport-proof/check-codec-fleet-contract.mjs
+
+  ores_transport:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-transport
+          ref: e880c9c655478a3c34798e3a18f2a206b31de3f4
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+      - name: Verify exact production head
+        run: test "$(git rev-parse HEAD)" = "e880c9c655478a3c34798e3a18f2a206b31de3f4"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.98.1
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-targets --all-features
+      - run: cargo check --no-default-features
+      - run: cargo check --no-default-features --features http
+      - run: cargo check --no-default-features --features tcp
+      - run: cargo check --no-default-features --features nats
+      - name: Prove admission is read-only
+        run: test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+  rpc_pool:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ORESoftware/ores-rpc-calls-http-tcp-pool.rs
+          ref: b04edbfbfdd1ec4f26a49315e46b012002228ce6
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+      - name: Verify exact production head
+        run: test "$(git rev-parse HEAD)" = "b04edbfbfdd1ec4f26a49315e46b012002228ce6"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Validate repository source contract
+        env:
+          ORES_ALLOW_MISSING_ZPKG_LOCK: "1"
+        run: cargo run --quiet --no-default-features --features repo-check --bin repo-check
+      - run: cargo fmt --all -- --check
+      - name: Feature-isolated compile
+        run: |
+          cargo check --all-targets --no-default-features
+          for feature in http tcp nats middleware-context ores-logging rate-limit rx shared-nats-defs repo-check; do
+            cargo check --all-targets --no-default-features --features "$feature"
+          done
+      - name: Feature-isolated tests
+        run: |
+          cargo test --all-targets --no-default-features
+          for feature in http tcp nats middleware-context ores-logging rate-limit rx shared-nats-defs; do
+            cargo test --all-targets --no-default-features --features "$feature"
+          done
+      - run: cargo test --all-targets
+      - run: cargo test --all-targets --all-features
+      - run: cargo test --doc --all-features
+      - name: Rustdoc warnings
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --all-features
+      - run: cargo clippy --all-targets --all-features -- -D warnings

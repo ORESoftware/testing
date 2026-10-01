@@ -1,0 +1,183 @@
+name: Create exact Meta Agents repository from quiet runner
+run-name: Owner-authorize meta-agents-demo/meta-agent-control-plane.rs from PR ${{ github.event.pull_request.number }}
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [master]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: create-exact-meta-agent-repository-quiet-runner
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: >-
+      github.event.pull_request.user.login == 'ORESoftware' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/create-meta-agent-repo-owner-auth-20260801' &&
+      github.event.pull_request.title == 'DO NOT MERGE: create exact Meta Agents repository from quiet runner'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      OAUTH_CLIENT_ID: 178c6fc778ccc68e1d6a
+      EXPECTED_LOGIN: ORESoftware
+      TARGET_REPOSITORY: meta-agents-demo/meta-agent-control-plane.rs
+      SOURCE_SHA: 55ee15c190b7cfa4e075f6984c7cb551acd4b9d3
+      BUNDLE_SHA256: 1ddaa03743b864348162149b7d2d2e2dce7eab585cf092ea14547c647fcec031
+      PUBLISHER_SHA256: e2fe6eaa622db02a54f83e27a822f64ad4b54971c883f97bbda4ac0a4db5d278
+      EXPECTED_MAIN: 4d6ec3ad0ec7b688f0e777129eee7e0f0d999df1
+      EXPECTED_FEATURE: 789d48039da232faed985d4f8de176959f117e08
+      FEATURE_REF: agent/den-1057-meta-agent-control-plane
+      TRACKING_PR: ${{ github.event.pull_request.number }}
+
+    steps:
+      - name: Check out immutable publication source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ORESoftware/k8s-cluster
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          persist-credentials: false
+
+      - name: Request short-lived owner authorization
+        shell: bash
+        env:
+          COMMENT_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          response="$RUNNER_TEMP/meta-agent-device-code.json"
+          token_response="$RUNNER_TEMP/meta-agent-device-token.json"
+          cleanup() {
+            rm -f "$response" "$token_response"
+            unset access_token device_code
+          }
+          trap cleanup EXIT
+
+          status="$(curl --silent --show-error \
+            --output "$response" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'Accept: application/json' \
+            --data-urlencode "client_id=${OAUTH_CLIENT_ID}" \
+            --data-urlencode 'scope=repo read:org' \
+            https://github.com/login/device/code)"
+          test "$status" = 200
+
+          device_code="$(jq -er '.device_code | select(type == "string" and length > 0)' "$response")"
+          user_code="$(jq -er '.user_code | select(type == "string" and length > 0)' "$response")"
+          verification_uri="$(jq -er '.verification_uri | select(type == "string" and startswith("https://github.com/"))' "$response")"
+          expires_in="$(jq -er '.expires_in | select(type == "number" and . > 0)' "$response")"
+          interval="$(jq -er '.interval | select(type == "number" and . > 0)' "$response")"
+          [[ "$user_code" =~ ^[A-Z0-9]{4}-[A-Z0-9]{4}$ ]]
+
+          GH_TOKEN="$COMMENT_TOKEN" gh pr comment "$TRACKING_PR" --repo "$GITHUB_REPOSITORY" --body \
+            "**Authorize exact Meta Agents repository creation now:** open ${verification_uri} and enter **\`${user_code}\`**. Ignore all older codes. This run accepts only GitHub account \`${EXPECTED_LOGIN}\` with active admin access to \`meta-agents-demo\`. Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          echo "::notice title=GitHub owner authorization::Open ${verification_uri} and enter ${user_code}"
+
+          elapsed=0
+          access_token=''
+          while (( elapsed < expires_in )); do
+            sleep "$interval"
+            elapsed=$((elapsed + interval))
+            status="$(curl --silent --show-error \
+              --output "$token_response" \
+              --write-out '%{http_code}' \
+              --request POST \
+              --header 'Accept: application/json' \
+              --data-urlencode "client_id=${OAUTH_CLIENT_ID}" \
+              --data-urlencode "device_code=${device_code}" \
+              --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:device_code' \
+              https://github.com/login/oauth/access_token)"
+            test "$status" = 200
+            error="$(jq -r '.error // empty' "$token_response")"
+            case "$error" in
+              '')
+                access_token="$(jq -er '.access_token | select(type == "string" and length > 0)' "$token_response")"
+                break
+                ;;
+              authorization_pending)
+                ;;
+              slow_down)
+                interval=$((interval + 5))
+                ;;
+              access_denied|expired_token|incorrect_device_code|incorrect_client_credentials)
+                echo "GitHub device authorization failed: ${error}" >&2
+                exit 1
+                ;;
+              *)
+                echo "Unexpected GitHub device-flow response: ${error}" >&2
+                exit 1
+                ;;
+            esac
+          done
+          test -n "$access_token"
+          echo "::add-mask::$access_token"
+          {
+            printf 'GH_TOKEN=%s\n' "$access_token"
+            printf 'GITHUB_REPOSITORY_ADMIN_TOKEN=%s\n' "$access_token"
+          } >> "$GITHUB_ENV"
+
+      - name: Verify exact owner identity and organization role
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(gh api user --jq .login)" = "$EXPECTED_LOGIN"
+          membership="$(gh api /user/memberships/orgs/meta-agents-demo)"
+          test "$(jq -er .role <<<"$membership")" = admin
+          test "$(jq -er .state <<<"$membership")" = active
+
+      - name: Reconstruct and verify exact recovered history
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/meta-agent-publication"
+          mkdir -p "$work"
+          bundle="$work/meta-agent-control-plane-den-1057.bundle"
+          cat source/scripts/critical-org-fleet/assets/meta.part* | base64 --decode > "$bundle"
+          printf '%s  %s\n' "$BUNDLE_SHA256" "$bundle" | sha256sum --check --strict
+          test "$(git bundle list-heads "$bundle" | wc -l)" -eq 2
+          test "$(git bundle list-heads "$bundle" | awk '$2 == "refs/heads/main" {print $1}')" = "$EXPECTED_MAIN"
+          test "$(git bundle list-heads "$bundle" | awk -v ref="refs/heads/$FEATURE_REF" '$2 == ref {print $1}')" = "$EXPECTED_FEATURE"
+          publisher="source/scripts/critical-org-fleet/publish_meta_control_plane.py"
+          printf '%s  %s\n' "$PUBLISHER_SHA256" "$publisher" | sha256sum --check --strict
+          python3 -m py_compile "$publisher"
+          printf 'BUNDLE_PATH=%s\n' "$bundle" >> "$GITHUB_ENV"
+          printf 'PUBLISHER_PATH=%s\n' "$publisher" >> "$GITHUB_ENV"
+
+      - name: Create public repository and push exact refs without force
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export GIT_TERMINAL_PROMPT=0
+          python3 "$PUBLISHER_PATH" "$BUNDLE_PATH"
+
+      - name: Verify live repository and report success
+        shell: bash
+        env:
+          COMMENT_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          metadata="$(gh api "repos/$TARGET_REPOSITORY")"
+          test "$(jq -r .owner.login <<<"$metadata")" = meta-agents-demo
+          test "$(jq -r .visibility <<<"$metadata")" = public
+          test "$(jq -r .default_branch <<<"$metadata")" = main
+          test "$(gh api "repos/$TARGET_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$EXPECTED_MAIN"
+          test "$(gh api "repos/$TARGET_REPOSITORY/git/ref/heads/$FEATURE_REF" --jq .object.sha)" = "$EXPECTED_FEATURE"
+          GH_TOKEN="$COMMENT_TOKEN" gh pr comment "$TRACKING_PR" --repo "$GITHUB_REPOSITORY" --body \
+            "Created and verified \`${TARGET_REPOSITORY}\`: \`main\` \`${EXPECTED_MAIN}\`; \`${FEATURE_REF}\` \`${EXPECTED_FEATURE}\`. Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Report failed publication
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "$TRACKING_PR" --repo "$GITHUB_REPOSITORY" --body \
+            "Exact Meta Agents repository creation failed before live ref verification. Inspect: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" >/dev/null || true

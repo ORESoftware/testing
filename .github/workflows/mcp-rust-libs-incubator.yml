@@ -1,0 +1,246 @@
+name: mcp-rust-libs polyglot incubator
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/mcp-rust-libs-incubator.yml
+      - .github/scripts/publish-mcp-rust-libs-owner-device.sh
+      - mcp-rust-libs/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-rust-libs-incubator-${{ github.ref }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: mcp-rust-libs
+
+jobs:
+  owner-authorized-publication:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.number == 2 &&
+       github.event.pull_request.draft == true &&
+       github.event.pull_request.user.login == 'ORESoftware' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref == 'incubator/mcp-rust-libs')
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Check out the reviewed carrier control files
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Execute the pinned exact-source owner publisher
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/publish-mcp-rust-libs-owner-device.sh
+
+  contracts-and-layout:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Validate carrier and target workflows
+        working-directory: .
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --volume "$GITHUB_WORKSPACE:/repo" \
+            --workdir /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            .github/workflows/mcp-rust-libs-incubator.yml \
+            mcp-rust-libs/.github/workflows/scaffold.yml
+      - name: Verify generated output, source invariants, layout, and fixtures
+        run: make check
+      - name: Verify Zed smoke-test entrypoint
+        run: sh scripts/verify-zed-package.sh "$GITHUB_WORKSPACE/mcp-rust-libs"
+      - name: Verify deterministic source manifest
+        run: python3 scripts/update-source-manifest.py --check
+
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: ["1.95.0", "1.97.1"]
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "${{ matrix.rust }}" --profile minimal --component clippy,rustfmt
+      - name: Resolve and verify the active lockfile
+        run: |
+          set -euo pipefail
+          cargo +${{ matrix.rust }} generate-lockfile --manifest-path packages/rust/Cargo.toml
+          cargo +${{ matrix.rust }} metadata --locked --manifest-path packages/rust/Cargo.toml --no-deps --format-version 1 >/dev/null
+      - name: Check formatting
+        run: cargo +${{ matrix.rust }} fmt --manifest-path packages/rust/Cargo.toml --all -- --check
+      - name: Test default feature sets
+        run: cargo +${{ matrix.rust }} test --locked --manifest-path packages/rust/Cargo.toml --workspace --all-targets
+      - name: Test minimal feature sets
+        run: cargo +${{ matrix.rust }} test --locked --manifest-path packages/rust/Cargo.toml --workspace --no-default-features
+      - name: Check all adapters
+        run: cargo +${{ matrix.rust }} check --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --all-targets
+      - name: Lint all adapters
+        run: cargo +${{ matrix.rust }} clippy --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --all-targets -- -D warnings
+      - name: Build documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo +${{ matrix.rust }} doc --locked --manifest-path packages/rust/Cargo.toml --workspace --all-features --no-deps
+      - name: Upload generated Rust lockfile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rust-lock-${{ matrix.rust }}
+          path: mcp-rust-libs/packages/rust/Cargo.lock
+          if-no-files-found: error
+          retention-days: 7
+
+  rust-supply-chain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "1.97.1" --profile minimal
+      - name: Resolve lockfile
+        run: cargo +1.97.1 generate-lockfile --manifest-path packages/rust/Cargo.toml
+      - name: Install pinned audit tools
+        uses: taiki-e/install-action@c44f6b046f1c29ae5918b1e0bfdbb2f1813836fd # v2
+        with:
+          tool: cargo-audit@0.22.2,cargo-deny@0.19.0
+      - name: Dependency vulnerability audit
+        working-directory: mcp-rust-libs/packages/rust
+        run: cargo audit --deny warnings
+      - name: License, source, wildcard, and duplicate policy
+        working-directory: mcp-rust-libs/packages/rust
+        run: cargo deny check --config ../../deny.toml
+
+  typescript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.17.1", "24.8.0"]
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Resolve package dependencies
+        run: npm --prefix packages/typescript install --ignore-scripts --no-audit --no-fund
+      - name: Type-check and build
+        run: npm --prefix packages/typescript run check && npm --prefix packages/typescript run build
+      - name: Run canonical fixture tests
+        run: npm --prefix packages/typescript test
+      - name: Inspect native package
+        working-directory: mcp-rust-libs/packages/typescript
+        run: npm pack --dry-run
+      - name: Upload generated npm lockfile
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-lock-${{ matrix.node }}
+          path: mcp-rust-libs/packages/typescript/package-lock.json
+          if-no-files-found: error
+          retention-days: 7
+
+  dart:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        dart: ["3.8.0", "3.12.2"]
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Dart SDK
+        uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1.7.2
+        with:
+          sdk: ${{ matrix.dart }}
+      - name: Resolve package dependencies
+        working-directory: mcp-rust-libs/packages/dart
+        run: dart pub get
+      - name: Check formatting and analysis
+        working-directory: mcp-rust-libs/packages/dart
+        run: dart format --output=none --set-exit-if-changed lib test && dart analyze
+      - name: Run canonical fixture tests
+        working-directory: mcp-rust-libs/packages/dart
+        run: dart test
+      - name: Inspect native package
+        working-directory: mcp-rust-libs/packages/dart
+        run: dart pub publish --dry-run
+
+  gleam:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Gleam and Erlang/OTP
+        uses: erlef/setup-beam@ee09b1e59bb240681c382eb1f0abc6a04af72764 # v1.23.0
+        with:
+          version-type: strict
+          gleam-version: "1.17.0"
+          otp-version: "29.0.1"
+      - name: Resolve package dependencies
+        working-directory: mcp-rust-libs/packages/gleam
+        run: gleam deps download
+      - name: Check formatting and compile
+        working-directory: mcp-rust-libs/packages/gleam
+        run: gleam format --check src test && gleam check
+      - name: Run generated contract tests
+        working-directory: mcp-rust-libs/packages/gleam
+        run: gleam test
+
+  exact-source:
+    if: always()
+    needs: [contracts-and-layout, rust, rust-supply-chain, typescript, dart, gleam]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Upload exact reviewed workspace
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mcp-rust-libs-semantic-merge-source
+          path: mcp-rust-libs
+          include-hidden-files: true
+          retention-days: 7
+          if-no-files-found: error

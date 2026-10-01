@@ -1,0 +1,14 @@
+
+name = "ore_mcp_contracts"
+version = "0.1.0"
+description = "Generated ORESoftware MCP contracts for Gleam/BEAM and JavaScript targets"
+licences = ["MIT", "Apache-2.0"]
+repository = { type = "github", user = "ORESoftware", repo = "mcp-rust-libs", path = "packages/gleam" }
+
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+gleam_json = ">= 3.0.2 and < 4.0.0"
+
+[dev-dependencies]
+gleeunit = ">= 1.2.0 and < 2.0.0"

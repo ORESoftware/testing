@@ -1,0 +1,23 @@
+[package]
+name = "ore-mcp-config"
+description = "Strict, secret-safe startup configuration for Rust MCP servers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[features]
+default = ["flags2env-adapter"]
+flags2env-adapter = ["dep:flags2env", "dep:ore-mcp-safety"]
+
+[dependencies]
+flags2env = { workspace = true, optional = true }
+ore-mcp-safety = { path = "../ore-mcp-safety", version = "=0.1.0", optional = true }
+thiserror.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "ore-mcp-safety"
+description = "Bounded-output, redaction, and validation primitives for Rust MCP servers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+ore-mcp-contracts = { path = "../ore-mcp-contracts", version = "=0.1.0" }
+serde.workspace = true
+
+[lints]
+workspace = true

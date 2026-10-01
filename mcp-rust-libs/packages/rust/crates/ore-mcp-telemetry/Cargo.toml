@@ -1,0 +1,28 @@
+[package]
+name = "ore-mcp-telemetry"
+description = "Stdio-safe tracing and OpenTelemetry for Rust MCP servers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+rmcp-router = ["dep:rmcp"]
+
+[dependencies]
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
+ore-mcp-runtime = { path = "../ore-mcp-runtime", version = "=0.1.0", default-features = false }
+ore-mcp-safety = { path = "../ore-mcp-safety", version = "=0.1.0" }
+rmcp = { workspace = true, optional = true }
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

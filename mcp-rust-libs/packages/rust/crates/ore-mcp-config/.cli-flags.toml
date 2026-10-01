@@ -1,0 +1,12 @@
+[parse]
+allow_unknown = false
+
+[env]
+ignore = ["API_TOKEN", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS"]
+
+[flags.log-filter]
+env = "RUST_LOG"
+aliases = ["log-filter"]
+type = "string"
+default = "info,hyper=warn"
+help = "Tracing filter for structured stderr logs."

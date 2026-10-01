@@ -1,0 +1,11 @@
+{
+  "error": {
+    "code": "upstream.timeout",
+    "message": "The diagnostic request timed out.",
+    "path": [
+      "upstream"
+    ],
+    "retryable": true
+  },
+  "ok": false
+}

@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": "invalid.field",
+    "message": "field is invalid",
+    "path": [
+      "request",
+      "name"
+    ],
+    "retryable": false
+  },
+  "meta": {},
+  "ok": false
+}

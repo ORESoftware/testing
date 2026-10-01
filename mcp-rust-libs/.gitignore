@@ -1,0 +1,17 @@
+
+.zpkg.lock.tmp
+.DS_Store
+.env
+.env.*
+!.env.example
+**/target/
+**/node_modules/
+**/.dart_tool/
+**/build/
+**/_build/
+**/deps/
+**/coverage/
+**/.coverage
+__pycache__/
+*.pyc
+.schema_digest

@@ -2406,13 +2406,19 @@ public final class ActorRuntime implements AutoCloseable {
                         envelope.close();
                         break;
                     }
-                    if (behavior == null) {
-                        turnExecutor.execute(() -> initializeBehavior(context));
-                    }
-                    if (!stopped.get()) {
-                        turnExecutor.execute(() -> processEnvelope(envelope, context));
-                    } else {
-                        envelope.close();
+                    boolean handedToHandler = false;
+                    try {
+                        if (behavior == null) {
+                            turnExecutor.execute(() -> initializeBehavior(context));
+                        }
+                        if (!stopped.get()) {
+                            handedToHandler = true;
+                            turnExecutor.execute(() -> processEnvelope(envelope, context));
+                        }
+                    } finally {
+                        // processEnvelope owns closing once invoked; otherwise
+                        // initialization/stop must release the dequeued message.
+                        if (!handedToHandler) envelope.close();
                     }
                 }
             } catch (Throwable failure) {

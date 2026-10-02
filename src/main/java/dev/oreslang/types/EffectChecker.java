@@ -403,6 +403,27 @@ public final class EffectChecker {
 
         if (stmt instanceof Ast.ForOfStmt loop) {
             scanExpr(loop.iterable(), current, scope);
+
+            // Class-backed for-of is syntactic sugar for a protocol call to
+            // [Symbol.iterator](). Its effects are therefore part of the loop's
+            // callable contract just as if the method were invoked explicitly.
+            // Built-in arrays/lists/tuples can lower to index-based iteration and
+            // do not require an iterator-object allocation at the language level.
+            ResolvedMethod iterator = resolveMethodCall(
+                    loop.iterable(), "Symbol.iterator", 0, current, scope);
+            if (iterator != null) {
+                Callable target = iterator.callable();
+                if (iterator.exactDispatch()
+                        || target.isStatic()
+                        || target.visibility() == Ast.Visibility.PRIVATE
+                        || (target.ownerClass() != null && target.ownerClass().isStruct())) {
+                    addCallee(current, target);
+                } else {
+                    addVirtualEffects(current, target,
+                            "implicit for-of call to " + target.displayName());
+                }
+            }
+
             Scope bodyScope = new Scope(scope);
             Ast.TypeRef iterable = inferType(loop.iterable(), current, scope);
             Ast.TypeRef element = collectionElement(iterable);

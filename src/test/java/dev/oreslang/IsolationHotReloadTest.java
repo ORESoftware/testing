@@ -37,6 +37,28 @@ final class IsolationHotReloadTest {
     }
 
     @Test
+    void isolatePolicyRoundTripsActorResourceCeilingsIntoGuestArguments() {
+        IsolatePolicy policy = new IsolatePolicy(
+                Set.of(
+                        IsolatePolicy.Capability.STDOUT,
+                        IsolatePolicy.Capability.ACTOR_SPAWN),
+                64L * 1024L * 1024L,
+                77,
+                9,
+                Duration.ofSeconds(12),
+                false);
+
+        IsolatePolicy parsed = IsolatePolicy.fromApplicationArguments(
+                policy.applicationArguments(ExecutionProfile.serverJit()));
+
+        assertEquals(policy.maxHeapBytes(), parsed.maxHeapBytes());
+        assertEquals(77, parsed.maxMailboxMessages());
+        assertEquals(9, parsed.maxActors());
+        assertEquals(Duration.ofSeconds(12), parsed.maxWallTime());
+        assertEquals(policy.capabilities(), parsed.capabilities());
+    }
+
+    @Test
     void capabilityAdmissionRejectsForbiddenApiBeforeGuestExecution() {
         var program = TypeChecker.check(Parser.parse("""
                 pub routine main() => void {
@@ -50,6 +72,43 @@ final class IsolationHotReloadTest {
 
         assertDoesNotThrow(() -> CapabilityChecker.check(program,
                 IsolatePolicy.strictFaas().withCapabilities(IsolatePolicy.Capability.PROCESS_INFO)));
+    }
+
+    @Test
+    void gcAndActorCapabilitiesRemainIndependentlyDeniedInStrictFaas() {
+        var gcProgram = TypeChecker.check(Parser.parse("""
+                pub routine main() => void {
+                  process.gc();
+                  return;
+                }
+                """));
+        SecurityException gcDenied = assertThrows(
+                SecurityException.class,
+                () -> CapabilityChecker.check(gcProgram, IsolatePolicy.strictFaas()));
+        assertTrue(gcDenied.getMessage().contains("GC_CONTROL"));
+
+        var actorProgram = TypeChecker.check(Parser.parse("""
+                fnc worker(String message) => void {
+                  return;
+                }
+
+                pub routine main() => void {
+                  val ref = actor.spawn(worker);
+                  actor.send(ref, "hello");
+                  return;
+                }
+                """));
+        SecurityException actorDenied = assertThrows(
+                SecurityException.class,
+                () -> CapabilityChecker.check(actorProgram, IsolatePolicy.strictFaas()));
+        assertTrue(actorDenied.getMessage().contains("ACTOR_SPAWN")
+                || actorDenied.getMessage().contains("ACTOR_SEND"));
+
+        IsolatePolicy messagingOnly = IsolatePolicy.strictFaas().withCapabilities(
+                IsolatePolicy.Capability.ACTOR_SPAWN,
+                IsolatePolicy.Capability.ACTOR_SEND);
+        assertDoesNotThrow(() -> CapabilityChecker.check(actorProgram, messagingOnly));
+        assertThrows(SecurityException.class, () -> CapabilityChecker.check(gcProgram, messagingOnly));
     }
 
     @Test
@@ -73,10 +132,10 @@ final class IsolationHotReloadTest {
     void hotReloadCreatesDistinctVersionedContextsWithoutFfi() {
         IsolatePolicy policy = IsolatePolicy.developer();
         try (HotReloadManager hot = new HotReloadManager(policy, ExecutionProfile.serverJit())) {
-            var first = hot.load("v1.ores", """
+            var first = hot.loadAndStart("v1.ores", """
                     pub routine main() => void { return; }
                     """);
-            var second = hot.load("v2.ores", """
+            var second = hot.loadAndStart("v2.ores", """
                     pub routine main() => void {
                       val version = 2;
                       return;
@@ -95,6 +154,62 @@ final class IsolationHotReloadTest {
     }
 
     @Test
+    void retiredGenerationWaitsForOutstandingLeaseThenReclaimsContext() {
+        IsolatePolicy policy = IsolatePolicy.developer();
+        try (HotReloadManager hot = new HotReloadManager(policy, ExecutionProfile.serverJit())) {
+            var generation = hot.loadAndStart("leased.ores", """
+                    pub routine main() => void { return; }
+                    """);
+            HotReloadManager.Lease lease = generation.acquire();
+
+            assertEquals(1L, generation.leaseCount());
+            hot.retire(generation.id());
+
+            assertTrue(generation.retired());
+            assertFalse(generation.closed());
+            assertEquals(0, hot.liveGenerations());
+            assertEquals(1, hot.retainedGenerations());
+
+            lease.close();
+
+            assertTrue(generation.closed());
+            assertEquals(0, hot.retainedGenerations());
+        }
+    }
+
+    @Test
+    void activatingReplacementRetiresOldGenerationOnlyAfterItsLeaseDrains() {
+        IsolatePolicy policy = IsolatePolicy.developer();
+        try (HotReloadManager hot = new HotReloadManager(policy, ExecutionProfile.serverJit())) {
+            var first = hot.loadAndStart("worker.ores", """
+                    pub routine main() => void { return; }
+                    """);
+            HotReloadManager.Lease lease = first.acquire();
+
+            var second = hot.load("worker.ores", """
+                    pub routine main() => void {
+                      val version = 2;
+                      return;
+                    }
+                    """);
+            assertFalse(second.activated());
+            assertSame(first, hot.active("worker.ores"));
+
+            second.start();
+            hot.activate(second);
+
+            assertSame(second, hot.active("worker.ores"));
+            assertTrue(first.retired());
+            assertFalse(first.closed());
+            assertEquals(1L, first.leaseCount());
+
+            lease.close();
+            assertTrue(first.closed());
+            assertEquals(1, hot.retainedGenerations());
+        }
+    }
+
+    @Test
     void hotLoadStagesWithoutRunningMainUntilExplicitStart() {
         IsolatePolicy policy = IsolatePolicy.developer();
         try (HotReloadManager hot = new HotReloadManager(policy, ExecutionProfile.serverJit())) {
@@ -106,50 +221,32 @@ final class IsolationHotReloadTest {
                     }
                     """);
             assertFalse(generation.started());
+            assertFalse(generation.activated());
+            assertNull(hot.active("staged.ores"));
             assertThrows(RuntimeException.class, generation::start);
             assertTrue(generation.closed());
+            assertEquals(0, hot.liveGenerations());
+            assertEquals(0, hot.retainedGenerations());
         }
     }
 
     @Test
-    void staleHotReloadGenerationCannotRollBackSingletonCode() {
+    void stagedHotReloadGenerationsAreResourceBounded() {
         IsolatePolicy policy = IsolatePolicy.developer();
-        try (HotReloadManager hot = new HotReloadManager(policy, ExecutionProfile.serverJit())) {
-            var first = hot.load("managed-singleton-generation.ores", """
-                    define singleton module managed_generation as
-                      let int count = 0;
-                      pub fnc next() => int {
-                        count = count + 1;
-                        return count;
-                      }
-                    end
+        try (HotReloadManager hot = new HotReloadManager(policy, ExecutionProfile.serverJit(), 2)) {
+            var first = hot.load("one.ores", "pub routine main() => void { return; }");
+            hot.load("two.ores", "pub routine main() => void { return; }");
+            assertEquals(2, hot.retainedGenerations());
 
-                    pub routine main() => void {
-                      val int n = await managed_generation.next();
-                      return;
-                    }
-                    """);
+            IllegalStateException full = assertThrows(
+                    IllegalStateException.class,
+                    () -> hot.load("three.ores", "pub routine main() => void { return; }"));
+            assertTrue(full.getMessage().contains("generation limit"));
 
-            var second = hot.load("managed-singleton-generation.ores", """
-                    define singleton module managed_generation as
-                      let int count = 0;
-                      pub fnc next() => int {
-                        count = count + 10;
-                        return count;
-                      }
-                    end
-
-                    pub routine main() => void {
-                      val int n = await managed_generation.next();
-                      return;
-                    }
-                    """);
-
-            assertDoesNotThrow(second::start);
-            RuntimeException stale = assertThrows(RuntimeException.class, first::start);
-            assertTrue(String.valueOf(stale.getMessage()).contains("stale singleton generation")
-                    || (stale.getCause() != null
-                    && String.valueOf(stale.getCause().getMessage()).contains("stale singleton generation")));
+            first.close();
+            assertEquals(1, hot.retainedGenerations());
+            assertDoesNotThrow(() ->
+                    hot.load("three.ores", "pub routine main() => void { return; }"));
         }
     }
 
@@ -163,17 +260,12 @@ final class IsolationHotReloadTest {
     void allExplicitStructuralParameterSpellingsWork() {
         assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
                 pub interface Bar {
-                  fnc marker() => String;
+                  marker: 'brand'
                 }
 
                 pub interface Foo extends Bar {
-                  fnc markerBrand() => String;
+                  markerBrand: 'marking/branding'
                 }
-
-                define class Branded as
-                  pub marker() => String { return "brand"; }
-                  pub markerBrand() => String { return "marking/branding"; }
-                end
 
                 fnc first(y structural Foo) => void {
                   return;
@@ -189,7 +281,7 @@ final class IsolationHotReloadTest {
                 }
 
                 pub routine main() => void {
-                  val branded = new Branded();
+                  val branded = obj{marker: "brand", markerBrand: "marking/branding"};
                   first(branded);
                   second(branded);
                   third(branded);
@@ -202,17 +294,13 @@ final class IsolationHotReloadTest {
     void structuralPermissionIsNotImplicit() {
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
                 pub interface Foo {
-                  fnc marker() => String;
+                  marker: 'brand'
                 }
-
-                define class Branded as
-                  pub marker() => String { return "brand"; }
-                end
 
                 fnc nominal(Foo y) => void { return; }
 
                 pub routine main() => void {
-                  val branded = new Branded();
+                  val branded = obj{marker: "brand"};
                   nominal(branded);
                   return;
                 }
@@ -222,7 +310,7 @@ final class IsolationHotReloadTest {
     @Test
     void extractedMethodValueKeepsReceiverAndSelfCannotBeRebound() throws Exception {
         String output = run("""
-                define class Box as
+                define class Box
                   val int value;
 
                   pub get() => int {
@@ -239,7 +327,7 @@ final class IsolationHotReloadTest {
         assertEquals("17", output);
 
         assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                define class Box as
+                define class Box
                   pub bad() => void {
                     self = new Box();
                     return;
@@ -260,24 +348,5 @@ final class IsolationHotReloadTest {
             context.eval(source);
         }
         return output.toString(StandardCharsets.UTF_8);
-    }
-    @Test
-    void capabilityAdmissionInspectsMethodsInsideCallableLocalStructs() {
-        var program = TypeChecker.check(Parser.parse("""
-                define module app as
-                  fnc make() => T {
-                    struct T {
-                      pub context() => string {
-                        return process.context_id;
-                      }
-                    }
-                    return T {};
-                  }
-                end
-                """));
-
-        SecurityException denied = assertThrows(SecurityException.class,
-                () -> CapabilityChecker.check(program, IsolatePolicy.strictFaas()));
-        assertTrue(denied.getMessage().contains("PROCESS_INFO"));
     }
 }

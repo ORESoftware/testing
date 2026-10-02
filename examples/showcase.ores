@@ -1,11 +1,11 @@
-define module contracts as
+define module contracts
   define interface MathApi
     fnc add(int a, int b) => int;
   end
 end
 
 @AdheresTo(contracts.MathApi)
-define module math as
+define module math
   pub fnc add(int a, int b) => int {
     return a + b;
   }
@@ -15,12 +15,12 @@ define module math as
   }
 end
 
-define module model as
-  define class Base as
+define module model
+  define class Base
     pub seven() => int { return 7; }
   end
 
-  define class Box<T> extends Base as
+  define class Box<T> extends Base
     val T value;
 
     @Ret<self>
@@ -30,7 +30,7 @@ define module model as
   end
 end
 
-define module app as
+define module app
   pub fnc main() => void {
     let answer = math.add(40, 2);
     answer = answer + 1;

@@ -1,6 +1,6 @@
-define module x as
+define module x
 
-  define class y as
+  define class y
 
   end
 

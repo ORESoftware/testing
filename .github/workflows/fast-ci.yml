@@ -31,3 +31,7 @@ jobs:
         run: |
           mvn -B -ntp -DskipTests exec:java -Dexec.args="examples/showcase.ores"
           mvn -B -ntp -DskipTests exec:java -Dexec.args="examples/together.ores"
+          mvn -B -ntp -DskipTests exec:java -Dexec.args="examples/callables.ores" | tee /tmp/oreslang-callables.out
+          grep -F "120:9:13" /tmp/oreslang-callables.out
+          mvn -B -ntp -DskipTests exec:java -Dexec.args="examples/actors.ores" | tee /tmp/oreslang-actors.out
+          grep -F "actor:singleton" /tmp/oreslang-actors.out

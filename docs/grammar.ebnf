@@ -7,74 +7,38 @@ import_decl     = "import" import_spec "from" STRING_LITERAL ";" ;
 import_spec     = "*" "as" IDENT
                 | "module" import_names
                 | "class" import_names
-                | "struct" import_names
                 | "fnc" import_names ;
 import_names    = IDENT
                 | "{" IDENT { "," IDENT } "}"
                 | "*" "as" IDENT ;
 
 top_level_item  = annotated_module_decl
-                | init_decl
                 | callable_decl
                 | class_decl
-                | struct_decl
-                | trait_decl
                 | interface_decl
                 | type_decl
                 | binding_decl ;
 
-annotated_module_decl = { annotation } "define" [ "singleton" ] "module" IDENT "as"
+annotated_module_decl = { annotation } "define" "module" IDENT
                         { module_member } "end" ;
 
-module_member   = init_decl
-                | callable_decl
+module_member   = callable_decl
                 | class_decl
-                | struct_decl
-                | trait_decl
                 | interface_decl
                 | type_decl
                 | binding_decl ;
 
 visibility      = [ "pub" | "private" ] ;
-callable_modifier = "abstract" | "async" ;
+callable_modifier = "abstract" | "async" | "nlex" ;
 
 callable_decl   = { annotation } visibility { callable_modifier } callable_kind IDENT [ generic_params ]
                   "(" [ param_list ] ")" return_spec block ;
 callable_kind   = "fnc" | "routine" ;
 
-init_decl       = "init" "routine" "(" ")" "=>" "void" block ;
-
 class_decl      = "define" [ "abstract" ] "class" IDENT [ generic_params ]
                   [ "extends" type_ref { "," type_ref } ]
-                  [ ( "is" | "implements" | "impl" ) type_ref { "," type_ref } ]
-                  [ "with" type_ref { "," type_ref } ]
-                  "as" { class_member } "end" ;
-
-struct_decl     = "struct" IDENT [ generic_params ]
-                  [ ( "is" | "implements" | "impl" ) type_ref { "," type_ref } ]
-                  [ "with" type_ref { "," type_ref } ]
-                  "{" { struct_member } "}"
-                | "define" "struct" IDENT [ generic_params ]
-                  [ ( "is" | "implements" | "impl" ) type_ref { "," type_ref } ]
-                  [ "with" type_ref { "," type_ref } ]
-                  "as" { struct_member } "end" ;
-
-struct_member   = struct_field_decl
-                | method_decl
-                | static_function_decl ;
-
-struct_field_decl
-                = visibility binding_kind type_ref IDENT [ "=" expression ] stmt_terminator
-                | visibility type_ref IDENT [ "=" expression ] stmt_terminator
-                | visibility IDENT ":" type_ref [ "=" expression ] struct_field_terminator ;
-
-trait_decl      = [ "define" ] "trait" IDENT [ generic_params ]
-                  [ ( "is" | "implements" | "impl" ) type_ref { "," type_ref } ]
-                  [ "with" type_ref { "," type_ref } ]
-                  ( "{" { trait_member } "}" | "as" { trait_member } "end" ) ;
-
-trait_member    = field_decl
-                | method_decl ;
+                  [ ( "implements" | "impl" ) type_ref { "," type_ref } ]
+                  { class_member } "end" ;
 
 class_member    = field_decl
                 | method_decl
@@ -100,9 +64,11 @@ interface_decl  = visibility "interface" IDENT [ generic_params ]
                   interface_body ;
 
 interface_body  = "{" { interface_member } "}"
-                | [ "as" ] { interface_member } "end" ;
+                | { interface_member } "end" ;
 
-interface_member= "fnc" IDENT [ generic_params ] "(" [ param_list ] ")" return_spec member_terminator ;
+interface_member= "fnc" IDENT [ generic_params ] "(" [ param_list ] ")" return_spec member_terminator
+                | IDENT ":" type_ref member_terminator
+                | [ binding_kind ] type_ref IDENT member_terminator ;
 
 type_decl       = "type" IDENT [ generic_params ] "=" type_ref stmt_terminator ;
 
@@ -121,8 +87,7 @@ destructure_stmt= "[" destructure_item { "," destructure_item } "]" "=" expressi
 destructure_item= binding_kind IDENT ;
 
 block           = "{" { statement } "}" ;
-statement       = local_type_decl
-                | binding_decl
+statement       = binding_decl
                 | destructure_stmt
                 | return_stmt
                 | if_stmt
@@ -130,19 +95,6 @@ statement       = local_type_decl
                 | defer_stmt
                 | for_stmt
                 | expression stmt_terminator ;
-
-local_type_decl = [ "define" ] "struct" IDENT [ generic_params ]
-                  [ ( "is" | "implements" | "impl" ) type_ref { "," type_ref } ]
-                  [ "with" type_ref { "," type_ref } ]
-                  ( "{" { struct_member } "}" | "as" { struct_member } "end" )
-                | [ "define" ] "trait" IDENT [ generic_params ]
-                  [ ( "is" | "implements" | "impl" ) type_ref { "," type_ref } ]
-                  [ "with" type_ref { "," type_ref } ]
-                  ( "{" { trait_member } "}" | "as" { trait_member } "end" )
-                | [ "define" ] "interface" IDENT [ generic_params ]
-                  [ "extends" type_ref { "," type_ref } ]
-                  interface_body
-                | "type" IDENT [ generic_params ] "=" type_ref stmt_terminator ;
 
 return_stmt     = "return" [ expression ] stmt_terminator ;
 defer_stmt      = "defer" expression stmt_terminator ;
@@ -182,8 +134,6 @@ primary         = literal
                 | IDENT
                 | "self"
                 | "new" type_ref "(" [ argument_list ] ")"
-                | named_struct_literal
-                | anonymous_struct_literal
                 | lambda
                 | tuple_literal
                 | array_literal
@@ -191,7 +141,7 @@ primary         = literal
                 | object_literal
                 | "(" expression ")" ;
 
-lambda          = pipe_lambda | typed_legacy_lambda ;
+lambda          = [ "nlex" ] ( pipe_lambda | typed_legacy_lambda ) ;
 pipe_lambda     = "|" [ lambda_param { "," lambda_param } ] "|" "->" block ;
 lambda_param    = IDENT | type_ref IDENT ;
 typed_legacy_lambda
@@ -201,16 +151,12 @@ tuple_literal   = "(" expression "," expression { "," expression } ")" ;
 array_literal   = "arr" "[" [ expression { "," expression } ] "]" ;
 legacy_array_literal = "[" [ expression { "," expression } ] "]" ;
 object_literal  = "obj" "{" [ object_field { "," object_field } ] "}" ;
-named_struct_literal = type_ref "{" [ struct_value_field { "," struct_value_field } ] "}" ;
-anonymous_struct_literal = "struct" "{" [ struct_value_field { "," struct_value_field } ] "}" ;
-struct_value_field = IDENT ( "=" | ":" ) expression ;
 object_field    = ( IDENT | STRING_LITERAL ) ":" expression ;
 
 literal         = INT_LITERAL | FLOAT_LITERAL | IMAG_LITERAL | STRING_LITERAL
                 | "true" | "false" ;
 
-type_ref        = borrow_type
-                | named_type
+type_ref        = named_type
                 | function_type
                 | grouped_type
                 | STRING_LITERAL
@@ -218,7 +164,6 @@ type_ref        = borrow_type
                 | "void"
                 | "null" ;
 
-borrow_type     = "&" [ "mut" ] type_ref ;
 named_type      = qualified_name [ "<" [ type_args ] ">" ] ;
 function_type   = "typeof" "fnc" "(" [ function_type_params ] ")" "->" type_ref
                 | "(" [ function_type_params ] ")" "->" type_ref ;
@@ -238,7 +183,6 @@ qualified_name  = IDENT { "." IDENT } ;
 
 stmt_terminator   = ";" | SAFE_STRUCTURAL_BOUNDARY ;
 member_terminator = ";" | INTERFACE_CLOSING_BOUNDARY ;
-struct_field_terminator = ";" | "," | STRUCT_CLOSING_BOUNDARY | NEXT_NAME_COLON_BOUNDARY ;
 
 (* Semantic restrictions:
    - Each source file is a separately versioned compilation/code unit and is the
@@ -246,43 +190,14 @@ struct_field_terminator = ";" | "," | STRUCT_CLOSING_BOUNDARY | NEXT_NAME_COLON_
    - Source namespaces are flat: namespace a.b; is illegal.
    - Modules are flat: module names are single identifiers and modules may not
      contain modules.
-   - "define singleton module X as" declares exactly one actor-backed module
-     state cell per OS process.
-   - "define module X as", "define class Y ... as", "define struct S ... as", and "define trait T ... as"
-     use "as" as the body marker. "as", "is", "with", and "trait" are reserved.
-   - Interfaces are storage-free contracts: they declare function signatures only.
-     They never allocate fields or contribute object layout.
-   - Stateful reusable composition uses traits. A class satisfies interfaces with
-     "is" and composes traits with "with". "implements"/"impl" remain migration
-     aliases for "is".
-   - Traits may contain initialized state, concrete methods, and abstract method
-     requirements, but are never directly instantiated and have no object identity.
-     Trait state is flattened into the host class before runtime.
-   - Traits are composition units, not runtime types. Trait names are rejected in
-     parameter/field/return/alias/generic-argument type positions, and a trait name
-     may not collide with a class/interface/type alias in the same module.
-   - Trait fields require initializers and are not positional constructor parameters.
-     Private trait state remains lexical to the defining trait.
-   - Multiple traits that contribute the same field are rejected. Multiple concrete
-     methods with the same name/arity require an explicit class override.
-   - v0 trait composition is module-local so flattening cannot silently change a
-     trait method's lexical module environment.
-   - "init routine() => void { ... }" is a lifecycle declaration, not an ordinary
-     callable. At file/root or ordinary-module scope it runs once per actor-local
-     module state. Inside a singleton module it runs exactly once when the
-     process singleton state cell is first created. Classes cannot declare it.
-   - Singleton bindings are actor-private by default. A public val/const class
-     instance may be exported as a typed proxy capability; the raw object never
-     crosses the singleton actor boundary and its method calls are request/reply.
-   - Other public singleton-module fields are illegal. Singleton state fields require
-     explicit process-stable types and context-free initializers.
-   - Public singleton functions are actor transport boundaries: generic/async
-     exports, mut/structural parameters, borrows, classes, and function/closure
-     values are rejected until explicit Send constraints exist.
-   - External singleton calls must be immediately awaited; singleton helper
-     classes are actor-private outside their owning singleton module.
-   - Cross-singleton mailbox waits are cycle-checked and policy-bounded.
    - fnc declarations may recurse; routines may not participate in a call cycle.
+   - nlex on fnc/routine is a capture barrier inherited by lambdas created
+     anywhere inside that callable. Explicit nlex lambdas establish the same
+     barrier for themselves and their nested lambdas.
+   - nlex blocks activation-local captures only. Module members, imports,
+     top-level callables/classes, and built-ins remain statically resolvable.
+   - Parameters and locals declared inside an nlex callable/lambda use normal
+     lexical shadowing and take precedence over module/global names.
    - fnc and routine declarations do not overload.
    - instance methods may overload only when arity differs.
    - class-level functions use "static fnc"; they have no self receiver and are
@@ -303,7 +218,13 @@ struct_field_terminator = ";" | "," | STRUCT_CLOSING_BOUNDARY | NEXT_NAME_COLON_
    - self is an immutable receiver borrow and cannot be rebound.
    - Parameters are immutable by default. Type "mut" name grants mutation of an
      owned parameter inside the callee, e.g. Bar mut b.
-   - &T is a shared immutable borrow. &mut T is an exclusive mutable borrow.
+   - Borrow<T> is a shared immutable borrow and is created with borrow(value).
+   - BorrowMut<T> is an exclusive mutable borrow and is created with borrow_mut(value).
+   - '&' is not pointer/reference syntax in Oreslang and is rejected by the lexer.
+   - take(value) makes an ownership transfer explicit; copy(value) is legal only
+     for statically Copy values; share(value) creates a capability-gated immutable
+     Shared<T> transport handle.
+   - User-written lifetime parameters/annotations are not part of the language.
    - Non-Copy values move through by-value bindings, arguments, and returns.
    - Structural parameters are read-only borrowed views and do not consume the
      passed value.
@@ -312,7 +233,4 @@ struct_field_terminator = ";" | "," | STRUCT_CLOSING_BOUNDARY | NEXT_NAME_COLON_
      into the closure environment; borrowed values cannot be captured.
    - Class fields declared val/const are immutable; field mutation requires let
      plus mutable owner access.
-   - borrow(...), copy(...), take(...), and share(...) are contextual compiler
-     intrinsics recognized from ordinary call-shaped expressions. They are not
-     lexer keywords and do not add reserved identifiers to the token grammar.
 *)

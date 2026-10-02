@@ -10,9 +10,13 @@ import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Supplier;
 
 public final class OresContext implements AutoCloseable {
     private static final ContextReference<OresContext> REFERENCE = ContextReference.create(OresLanguage.class);
@@ -22,13 +26,14 @@ public final class OresContext implements AutoCloseable {
     private final BufferedReader input;
     private final PrintWriter output;
     private final ActorRuntime actors;
+    private final GcController gc;
     private final UUID contextId = UUID.randomUUID();
     private final AtomicLong schedulerSafepoints = new AtomicLong();
-    private final Map<Object, Object> contextLocals = new ConcurrentHashMap<>();
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final ConcurrentHashMap<CompletableFuture<?>, Thread> asyncTasks = new ConcurrentHashMap<>();
+    private final Semaphore asyncPermits;
     private final IsolatePolicy isolatePolicy;
     private final ExecutionProfile executionProfile;
-    private final boolean graalIsolated;
-    private final long codeGeneration;
 
     public OresContext(OresLanguage language, TruffleLanguage.Env env) {
         this.language = language;
@@ -37,9 +42,9 @@ public final class OresContext implements AutoCloseable {
         this.output = new PrintWriter(env.out(), true);
         this.isolatePolicy = IsolatePolicy.fromApplicationArguments(env.getApplicationArguments());
         this.executionProfile = IsolatePolicy.executionProfileFromApplicationArguments(env.getApplicationArguments());
-        this.graalIsolated = IsolatePolicy.graalIsolatedFromApplicationArguments(env.getApplicationArguments());
-        this.codeGeneration = codeGenerationFromApplicationArguments(env.getApplicationArguments());
         this.actors = new ActorRuntime(isolatePolicy);
+        this.gc = new GcController(actors);
+        this.asyncPermits = new Semaphore(Math.max(1, isolatePolicy.maxActors()), true);
     }
 
     public static OresContext get(Node node) {
@@ -51,11 +56,10 @@ public final class OresContext implements AutoCloseable {
     public BufferedReader input() { return input; }
     public PrintWriter output() { return output; }
     public ActorRuntime actors() { return actors; }
+    public GcController gc() { return gc; }
     public UUID contextId() { return contextId; }
     public IsolatePolicy isolatePolicy() { return isolatePolicy; }
     public ExecutionProfile executionProfile() { return executionProfile; }
-    public boolean graalIsolated() { return graalIsolated; }
-    public long codeGeneration() { return codeGeneration; }
 
     public void requireCapability(IsolatePolicy.Capability capability, String api) {
         isolatePolicy.require(capability, api);
@@ -68,52 +72,97 @@ public final class OresContext implements AutoCloseable {
      */
     public void schedulerSafepoint() {
         schedulerSafepoints.incrementAndGet();
-        ProcessSingletonRegistry.checkExecutionBudget();
         actors.schedulerSafepoint();
     }
 
     public long schedulerSafepoints() { return schedulerSafepoints.get(); }
 
     /**
-     * Context-lifetime storage used when code executes outside an actor. This
-     * is deliberately separate from actor-local state so ordinary module state
-     * cannot leak between actor identities.
+     * Bounded structured-at-context async execution. Async callables use virtual
+     * threads, but task creation is admission-controlled and every live task is
+     * owned by this context so close() can cancel it.
      */
-    @SuppressWarnings("unchecked")
-    public <K, V> V contextLocal(K key, Supplier<? extends V> factory) {
-        java.util.Objects.requireNonNull(key, "context-local key");
-        java.util.Objects.requireNonNull(factory, "context-local factory");
-        return (V) contextLocals.computeIfAbsent(
-                key,
-                ignored -> java.util.Objects.requireNonNull(
-                        factory.get(), "context-local factory returned null"));
+    public <T> CompletionStage<T> submitAsync(Callable<T> task) {
+        java.util.Objects.requireNonNull(task, "task");
+        if (closed.get()) throw new java.util.concurrent.CancellationException("Oreslang context is closed");
+        if (!asyncPermits.tryAcquire()) {
+            throw new IllegalStateException(
+                    "async task limit exceeded for isolate: maxAsyncTasks=" + isolatePolicy.maxActors());
+        }
+
+        CompletableFuture<T> future = new CompletableFuture<>();
+        try {
+            Thread thread = Thread.ofVirtual().name("ores-async-" + contextId).unstarted(() -> {
+                try {
+                    if (closed.get()) throw new java.util.concurrent.CancellationException("Oreslang context is closing");
+                    future.complete(task.call());
+                } catch (Throwable failure) {
+                    future.completeExceptionally(failure);
+                } finally {
+                    asyncTasks.remove(future);
+                    asyncPermits.release();
+                }
+            });
+            asyncTasks.put(future, thread);
+            if (closed.get()) {
+                asyncTasks.remove(future);
+                asyncPermits.release();
+                future.cancel(true);
+                throw new java.util.concurrent.CancellationException("Oreslang context is closing");
+            }
+            thread.start();
+            return future;
+        } catch (Throwable startFailure) {
+            if (asyncTasks.remove(future) != null) asyncPermits.release();
+            throw startFailure;
+        }
     }
 
-    private static long codeGenerationFromApplicationArguments(String[] args) {
-        for (String arg : args) {
-            if (!arg.startsWith("--ores-code-generation=")) continue;
-            long generation = Long.parseLong(arg.substring("--ores-code-generation=".length()));
-            if (generation < 0) throw new IllegalArgumentException("ores code generation cannot be negative");
-            return generation;
-        }
-        return 0L;
+    public int activeAsyncTasks() {
+        return asyncTasks.size();
     }
 
     public Map<String, Object> processDescriptor() {
-        return Map.of(
-                "context_id", contextId.toString(),
-                "runtime", "graalvm-truffle",
-                "language", "oreslang",
-                "execution_mode", executionProfile.mode().name(),
-                "platform", executionProfile.platform().name(),
-                "graal_isolated", graalIsolated,
-                "scheduler_safepoints", schedulerSafepoints.get());
+        return Map.ofEntries(
+                Map.entry("context_id", contextId.toString()),
+                Map.entry("runtime", "graalvm-truffle"),
+                Map.entry("language", "oreslang"),
+                Map.entry("execution_mode", executionProfile.mode().name()),
+                Map.entry("platform", executionProfile.platform().name()),
+                Map.entry("scheduler_safepoints", schedulerSafepoints.get()),
+                Map.entry("active_actors", actors.activeActorCount()),
+                Map.entry("active_monitors", actors.activeMonitorCount()),
+                Map.entry("max_actors", isolatePolicy.maxActors()),
+                Map.entry("actor_heap_backend", "logical_jvm"),
+                Map.entry("actor_physical_heap_isolation", false),
+                Map.entry("manual_gc_requests", gc.requests()));
     }
 
     @Override
     public void close() {
+        if (!closed.compareAndSet(false, true)) return;
+
+        var tasks = java.util.List.copyOf(asyncTasks.entrySet());
+        for (Map.Entry<CompletableFuture<?>, Thread> entry : tasks) {
+            entry.getKey().cancel(true);
+            entry.getValue().interrupt();
+        }
+
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(1);
+        for (Map.Entry<CompletableFuture<?>, Thread> entry : tasks) {
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0L) break;
+            try {
+                long millis = Math.max(1L, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(remaining));
+                entry.getValue().join(millis);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+
+        asyncTasks.clear();
         actors.close();
-        contextLocals.clear();
         output.flush();
     }
 }

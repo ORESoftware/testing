@@ -22,6 +22,7 @@ public record IsolatePolicy(
         Set<Capability> capabilities,
         long maxHeapBytes,
         int maxMailboxMessages,
+        int maxActors,
         Duration maxWallTime,
         boolean adversarial) {
 
@@ -29,8 +30,11 @@ public record IsolatePolicy(
         STDIN,
         STDOUT,
         PROCESS_INFO,
-        PROCESS_SINGLETON,
+        ACTOR_SPAWN,
+        ACTOR_SEND,
+        ACTOR_CONTROL,
         ACTOR_SHARE_READONLY,
+        GC_CONTROL,
         NETWORK,
         FILESYSTEM_READ,
         FILESYSTEM_WRITE,
@@ -45,20 +49,26 @@ public record IsolatePolicy(
     }
 
     public IsolatePolicy(Set<Capability> capabilities, long maxHeapBytes, int maxMailboxMessages, Duration maxWallTime) {
-        this(capabilities, maxHeapBytes, maxMailboxMessages, maxWallTime, false);
+        this(capabilities, maxHeapBytes, maxMailboxMessages, 1024, maxWallTime, false);
+    }
+
+    public IsolatePolicy(
+            Set<Capability> capabilities,
+            long maxHeapBytes,
+            int maxMailboxMessages,
+            Duration maxWallTime,
+            boolean adversarial) {
+        this(capabilities, maxHeapBytes, maxMailboxMessages, 1024, maxWallTime, adversarial);
     }
 
     public IsolatePolicy {
         capabilities = Set.copyOf(capabilities);
         if (maxHeapBytes < 16L * 1024 * 1024) throw new IllegalArgumentException("maxHeapBytes must be at least 16 MiB");
         if (maxMailboxMessages <= 0) throw new IllegalArgumentException("maxMailboxMessages must be positive");
+        if (maxActors <= 0) throw new IllegalArgumentException("maxActors must be positive");
         if (maxWallTime.isNegative() || maxWallTime.isZero()) throw new IllegalArgumentException("maxWallTime must be positive");
         if (adversarial && capabilities.contains(Capability.THREAD_CREATE)) {
             throw new IllegalArgumentException("adversarial isolates cannot grant THREAD_CREATE");
-        }
-        if (adversarial && capabilities.contains(Capability.PROCESS_SINGLETON)) {
-            throw new IllegalArgumentException("adversarial Graal isolates cannot grant PROCESS_SINGLETON until"
-                    + " a trusted host/supervisor process-singleton coordinator is installed");
         }
     }
 
@@ -67,15 +77,26 @@ public record IsolatePolicy(
      * one guest thread, hard VM isolate and guest resource limits.
      */
     public static IsolatePolicy strictFaas() {
-        return new IsolatePolicy(Set.of(Capability.STDOUT), 128L * 1024 * 1024, 1024, Duration.ofSeconds(30), true);
+        return new IsolatePolicy(
+                Set.of(Capability.STDOUT),
+                128L * 1024 * 1024,
+                1024,
+                128,
+                Duration.ofSeconds(30),
+                true);
     }
 
     /** Restricted local/test baseline. FFI/native/reflection/process spawning remain denied. */
     public static IsolatePolicy developer() {
         return new IsolatePolicy(
                 Set.of(Capability.STDIN, Capability.STDOUT, Capability.PROCESS_INFO,
-                        Capability.PROCESS_SINGLETON, Capability.ACTOR_SHARE_READONLY, Capability.HOT_CODE_LOAD),
-                512L * 1024 * 1024, 8192, Duration.ofMinutes(10), false);
+                        Capability.ACTOR_SPAWN, Capability.ACTOR_SEND, Capability.ACTOR_CONTROL,
+                        Capability.ACTOR_SHARE_READONLY, Capability.GC_CONTROL, Capability.HOT_CODE_LOAD),
+                512L * 1024 * 1024,
+                8192,
+                8192,
+                Duration.ofMinutes(10),
+                false);
     }
 
     public IsolatePolicy withCapabilities(Capability... added) {
@@ -83,11 +104,13 @@ public record IsolatePolicy(
                 ? EnumSet.noneOf(Capability.class)
                 : EnumSet.copyOf(capabilities);
         next.addAll(Arrays.asList(added));
-        return new IsolatePolicy(next, maxHeapBytes, maxMailboxMessages, maxWallTime, adversarial);
+        return new IsolatePolicy(next, maxHeapBytes, maxMailboxMessages, maxActors, maxWallTime, adversarial);
     }
 
     public IsolatePolicy asAdversarial() {
-        return adversarial ? this : new IsolatePolicy(capabilities, maxHeapBytes, maxMailboxMessages, maxWallTime, true);
+        return adversarial
+                ? this
+                : new IsolatePolicy(capabilities, maxHeapBytes, maxMailboxMessages, maxActors, maxWallTime, true);
     }
 
     /**
@@ -103,10 +126,6 @@ public record IsolatePolicy(
     }
 
     public Context.Builder restrictedContextBuilder(ExecutionProfile profile) {
-        return restrictedContextBuilder(profile, new String[0]);
-    }
-
-    public Context.Builder restrictedContextBuilder(ExecutionProfile profile, String... extraArguments) {
         HostAccess hostAccess = adversarial
                 ? HostAccess.newBuilder(HostAccess.NONE).allowMutableTargetMappings().methodScoping(true).build()
                 : HostAccess.NONE;
@@ -121,7 +140,7 @@ public record IsolatePolicy(
                 .in(new ByteArrayInputStream(new byte[0]))
                 .out(new ByteArrayOutputStream())
                 .err(new ByteArrayOutputStream())
-                .arguments(OresLanguage.ID, applicationArguments(profile, extraArguments));
+                .arguments(OresLanguage.ID, applicationArguments(profile));
 
         /*
          * Graal's engine.IsolateLibrary option is experimental in 25.x. Opt in
@@ -161,37 +180,31 @@ public record IsolatePolicy(
     }
 
     public String[] applicationArguments(ExecutionProfile profile) {
-        return applicationArguments(profile, new String[0]);
-    }
-
-    public String[] applicationArguments(ExecutionProfile profile, String... extraArguments) {
         String caps = capabilities.stream().map(Enum::name).sorted().collect(Collectors.joining(","));
-        String[] base = new String[] {
+        return new String[] {
                 "--ores-capabilities=" + caps,
                 "--ores-max-heap-bytes=" + maxHeapBytes,
                 "--ores-max-mailbox-messages=" + maxMailboxMessages,
-                "--ores-max-wall-ms=" + maxWallTime.toMillis(),
+                "--ores-max-actors=" + maxActors,
+                "--ores-max-wall-ms=" + millisSaturated(maxWallTime),
                 "--ores-adversarial=" + adversarial,
-                "--ores-graal-isolated=" + adversarial,
                 "--ores-execution-mode=" + profile.mode().name(),
                 "--ores-platform=" + profile.platform().name()
         };
-        if (extraArguments == null || extraArguments.length == 0) return base;
-        String[] combined = java.util.Arrays.copyOf(base, base.length + extraArguments.length);
-        System.arraycopy(extraArguments, 0, combined, base.length, extraArguments.length);
-        return combined;
     }
 
     public static IsolatePolicy fromApplicationArguments(String[] args) {
         String raw = null;
         long maxHeap = 128L * 1024 * 1024;
         int maxMailbox = 1024;
+        int maxActors = 128;
         long maxWallMs = 30_000L;
         boolean adversarial = false;
         for (String arg : args) {
             if (arg.startsWith("--ores-capabilities=")) raw = arg.substring("--ores-capabilities=".length());
             else if (arg.startsWith("--ores-max-heap-bytes=")) maxHeap = Long.parseLong(arg.substring("--ores-max-heap-bytes=".length()));
             else if (arg.startsWith("--ores-max-mailbox-messages=")) maxMailbox = Integer.parseInt(arg.substring("--ores-max-mailbox-messages=".length()));
+            else if (arg.startsWith("--ores-max-actors=")) maxActors = Integer.parseInt(arg.substring("--ores-max-actors=".length()));
             else if (arg.startsWith("--ores-max-wall-ms=")) maxWallMs = Long.parseLong(arg.substring("--ores-max-wall-ms=".length()));
             else if (arg.startsWith("--ores-adversarial=")) adversarial = Boolean.parseBoolean(arg.substring("--ores-adversarial=".length()));
         }
@@ -200,16 +213,7 @@ public record IsolatePolicy(
         if (!raw.isBlank()) {
             for (String value : raw.split(",")) caps.add(Capability.valueOf(value.trim().toUpperCase(Locale.ROOT)));
         }
-        return new IsolatePolicy(caps, maxHeap, maxMailbox, Duration.ofMillis(maxWallMs), adversarial);
-    }
-
-    public static boolean graalIsolatedFromApplicationArguments(String[] args) {
-        for (String arg : args) {
-            if (arg.startsWith("--ores-graal-isolated=")) {
-                return Boolean.parseBoolean(arg.substring("--ores-graal-isolated=".length()));
-            }
-        }
-        return false;
+        return new IsolatePolicy(caps, maxHeap, maxMailbox, maxActors, Duration.ofMillis(maxWallMs), adversarial);
     }
 
     public static ExecutionProfile executionProfileFromApplicationArguments(String[] args) {
@@ -222,11 +226,19 @@ public record IsolatePolicy(
         return ExecutionProfile.parse(mode, platform);
     }
 
+    private static long millisSaturated(Duration value) {
+        try {
+            return Math.max(1L, value.toMillis());
+        } catch (ArithmeticException overflow) {
+            return Long.MAX_VALUE / 4L;
+        }
+    }
+
     private static String bytes(long value) {
         return value + "B";
     }
 
     private static String duration(Duration value) {
-        return value.toMillis() + "ms";
+        return millisSaturated(value) + "ms";
     }
 }

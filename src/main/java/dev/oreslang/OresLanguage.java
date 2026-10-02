@@ -35,12 +35,9 @@ public final class OresLanguage extends TruffleLanguage<OresContext> {
 
     @Override
     protected CallTarget parse(ParsingRequest request) {
-        var source = request.getSource();
-        String text = source.getCharacters().toString();
+        String text = request.getSource().getCharacters().toString();
         Ast.Program program = OresCompiler.parseAndTypeCheck(text);
-        String codeUnitId = source.getPath();
-        if (codeUnitId == null || codeUnitId.isBlank()) codeUnitId = source.getName();
-        RootCallTarget evaluator = new OresEvalRootNode(this, program, codeUnitId).getCallTarget();
+        RootCallTarget evaluator = new OresEvalRootNode(this, program).getCallTarget();
         return new OresInteropRootNode(this, evaluator).getCallTarget();
     }
 }

@@ -656,6 +656,44 @@ final class ZeroCopyZeroAllocEffectTest {
                 """));
     }
 
+    @Test
+    void boundMethodExtractionAllocatesButDirectCallDoesNot() {
+        IllegalArgumentException extracted = assertThrows(IllegalArgumentException.class, () ->
+                check("""
+                        define class Box as
+                          @NoAlloc
+                          @NoCopy
+                          pub get() => int {
+                            return 7;
+                          }
+                        end
+
+                        @NoAlloc
+                        fnc extract(Box box) => int {
+                          val callback = box.get;
+                          return 1;
+                        }
+                        """));
+        assertTrue(extracted.getMessage().contains("@NoAlloc contract violated"));
+        assertTrue(extracted.getMessage().contains("bound method extraction"));
+
+        assertDoesNotThrow(() -> check("""
+                define class Box as
+                  @NoAlloc
+                  @NoCopy
+                  pub get() => int {
+                    return 7;
+                  }
+                end
+
+                @NoAlloc
+                @NoCopy
+                fnc direct(Box box) => int {
+                  return box.get();
+                }
+                """));
+    }
+
     private static void check(String source) {
         TypeChecker.check(Parser.parse(source));
     }

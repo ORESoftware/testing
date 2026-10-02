@@ -369,6 +369,8 @@ The slice has two simultaneous limits:
 
 Destroying the actor terminates its worker and releases the actor-owned slice. A physical backend may back that slice with an actor-owned confined FFM arena or a separate Graal/native isolate. It must never make an OS carrier thread the owner.
 
+Private actor memory is elastic rather than fully committed up front. The runtime starts with a small commitment (1 MiB by default), may grow it automatically under allocation pressure, and allows the actor/worker to request additional capacity explicitly. Growth is a request to the VM/supervisor, not an entitlement: the memory governor may deny it, and hard actor/runtime limits always win.
+
 Shared actors may additionally receive:
 
 1. deeply immutable `Shared<T>` values; and

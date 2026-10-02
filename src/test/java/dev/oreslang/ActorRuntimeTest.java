@@ -1279,4 +1279,188 @@ final class ActorRuntimeTest {
     }
 
 
+
+    @Test
+    void privateActorStartsWithOneMiBCommittedCapacity() throws Exception {
+        long mib = 1024L * 1024L;
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            CountDownLatch received = new CountDownLatch(1);
+            AtomicReference<Long> committed = new AtomicReference<>();
+            AtomicReference<Thread> worker = new AtomicReference<>();
+
+            var ref = runtime.<String>spawnPrivate(() -> (message, context) -> {
+                worker.set(Thread.currentThread());
+                committed.set(context.privateMemory().orElseThrow().committedBytes());
+                received.countDown();
+            });
+
+            ref.send("inspect");
+            assertTrue(received.await(2, TimeUnit.SECONDS));
+            assertEquals(mib, committed.get());
+            assertEquals(mib, runtime.privateMemoryCommittedBytes());
+            assertTrue(worker.get().isVirtual());
+            assertTrue(worker.get().getName().startsWith("ores-private-actor-worker-"));
+        }
+    }
+
+    @Test
+    void actorWorkerCanRequestAdditionalMemoryFromVm() throws Exception {
+        long mib = 1024L * 1024L;
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            CountDownLatch received = new CountDownLatch(1);
+            AtomicReference<ActorRuntime.MemoryGrowthResult> growth = new AtomicReference<>();
+            AtomicReference<Thread> before = new AtomicReference<>();
+            AtomicReference<Thread> after = new AtomicReference<>();
+
+            var ref = runtime.<String>spawnPrivate(() -> (message, context) -> {
+                before.set(Thread.currentThread());
+                growth.set(context.privateMemory().orElseThrow().requestAdditionalMemory(3L * mib));
+                after.set(Thread.currentThread());
+                received.countDown();
+            });
+
+            ref.send("grow");
+            assertTrue(received.await(2, TimeUnit.SECONDS));
+            assertTrue(growth.get().approved());
+            assertEquals(3L * mib, growth.get().grantedBytes());
+            assertEquals(4L * mib, growth.get().committedBytes());
+            assertEquals(4L * mib, runtime.privateMemoryCommittedBytes());
+            assertSame(before.get(), after.get(),
+                    "memory growth never moves an actor onto another worker");
+        }
+    }
+
+    @Test
+    void vmProactivelyGrowsPrivateActorNearHighWatermark() throws Exception {
+        long kib = 1024L;
+        long mib = 1024L * kib;
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            CountDownLatch received = new CountDownLatch(1);
+            AtomicReference<Long> committed = new AtomicReference<>();
+
+            var ref = runtime.<String>spawnPrivate(() -> (message, context) -> {
+                var memory = context.privateMemory().orElseThrow();
+                try (var reservation = memory.reserveHeap(850L * kib)) {
+                    committed.set(memory.committedBytes());
+                }
+                received.countDown();
+            });
+
+            ref.send("pressure");
+            assertTrue(received.await(2, TimeUnit.SECONDS));
+            assertEquals(2L * mib, committed.get(),
+                    "80% high-water pressure should trigger best-effort VM growth");
+        }
+    }
+
+    @Test
+    void vmGovernorCanDenyActorRequestedGrowth() throws Exception {
+        long mib = 1024L * 1024L;
+        ActorRuntime.MemoryGovernor governor =
+                request -> request.reason() != ActorRuntime.MemoryGrowthReason.ACTOR_REQUEST;
+
+        try (ActorRuntime runtime = new ActorRuntime(
+                IsolatePolicy.developer(),
+                ActorRuntime.WorkerConfig.defaults(),
+                ActorRuntime.MemoryConfig.defaults(),
+                governor)) {
+            CountDownLatch received = new CountDownLatch(1);
+            AtomicReference<ActorRuntime.MemoryGrowthResult> growth = new AtomicReference<>();
+
+            var ref = runtime.<String>spawnPrivate(() -> (message, context) -> {
+                growth.set(context.privateMemory().orElseThrow().requestAdditionalMemory(mib));
+                received.countDown();
+            });
+
+            ref.send("ask");
+            assertTrue(received.await(2, TimeUnit.SECONDS));
+            assertFalse(growth.get().approved());
+            assertEquals("VM memory governor denied growth", growth.get().denialReason());
+            assertEquals(mib, growth.get().committedBytes());
+            assertEquals(mib, runtime.privateMemoryCommittedBytes());
+        }
+    }
+
+    @Test
+    void vmGovernorCanDenyAutomaticGrowthRequiredByAllocation() throws Exception {
+        long mib = 1024L * 1024L;
+        ActorRuntime.MemoryGovernor governor =
+                request -> request.reason() != ActorRuntime.MemoryGrowthReason.REQUIRED_FOR_ALLOCATION;
+
+        try (ActorRuntime runtime = new ActorRuntime(
+                IsolatePolicy.developer(),
+                ActorRuntime.WorkerConfig.defaults(),
+                ActorRuntime.MemoryConfig.defaults(),
+                governor)) {
+            CountDownLatch received = new CountDownLatch(1);
+            AtomicReference<String> failure = new AtomicReference<>();
+
+            var ref = runtime.<String>spawnPrivate(() -> (message, context) -> {
+                var memory = context.privateMemory().orElseThrow();
+                try {
+                    memory.reserveHeap(2L * mib);
+                    failure.set("allocation unexpectedly succeeded");
+                } catch (IllegalStateException denied) {
+                    failure.set(denied.getMessage());
+                }
+                received.countDown();
+            });
+
+            ref.send("allocate");
+            assertTrue(received.await(2, TimeUnit.SECONDS));
+            assertTrue(failure.get().contains("growth denied"));
+            assertEquals(mib, runtime.privateMemoryCommittedBytes());
+        }
+    }
+
+    @Test
+    void initialActorWorkerCommitmentsShareTheRuntimeBudgetAndReturnOnStop() throws Exception {
+        long mib = 1024L * 1024L;
+        IsolatePolicy developer = IsolatePolicy.developer();
+        IsolatePolicy ceiling = new IsolatePolicy(
+                developer.capabilities(),
+                16L * mib,
+                developer.maxMailboxMessages(),
+                developer.maxWallTime(),
+                false);
+
+        try (ActorRuntime runtime = new ActorRuntime(ceiling)) {
+            List<ActorRuntime.ActorRef<String>> refs = new ArrayList<>();
+            for (int n = 0; n < 16; n++) {
+                refs.add(runtime.<String>spawnPrivate(ceiling, () -> (message, context) -> { }));
+            }
+
+            assertEquals(16L * mib, runtime.privateMemoryCommittedBytes());
+            assertThrows(IllegalStateException.class,
+                    () -> runtime.<String>spawnPrivate(ceiling, () -> (message, context) -> { }));
+
+            refs.getFirst().stop();
+            assertEquals(15L * mib, runtime.privateMemoryCommittedBytes());
+            assertDoesNotThrow(
+                    () -> runtime.<String>spawnPrivate(ceiling, () -> (message, context) -> { }));
+            assertEquals(16L * mib, runtime.privateMemoryCommittedBytes());
+        }
+    }
+
+    @Test
+    void sharedMemoryCompetesWithPrivateCommittedCapacity() {
+        long mib = 1024L * 1024L;
+        IsolatePolicy developer = IsolatePolicy.developer();
+        IsolatePolicy ceiling = new IsolatePolicy(
+                developer.capabilities(),
+                16L * mib,
+                developer.maxMailboxMessages(),
+                developer.maxWallTime(),
+                false);
+
+        try (ActorRuntime runtime = new ActorRuntime(ceiling)) {
+            for (int n = 0; n < 16; n++) {
+                runtime.<String>spawnPrivate(ceiling, () -> (message, context) -> { });
+            }
+            assertEquals(16L * mib, runtime.actorMemoryBudgetBytes());
+            assertThrows(IllegalStateException.class,
+                    () -> runtime.shareReadonly(List.of("no budget remains")));
+        }
+    }
+
 }

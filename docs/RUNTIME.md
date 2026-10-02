@@ -20,6 +20,9 @@
 16. Private slices and synchronized shared cells compete for one parent actor-memory ceiling.
 17. Actor message graphs are cycle-checked and bounded by depth, node count, and logical byte quotas before transport.
 18. SharedMutex runtime ownership is reserved before mailbox visibility and committed only after successful admission; failed first publication rolls back.
+19. Every private actor/worker starts with 1 MiB of VM-committed capacity by default; committed capacity is distinct from live used bytes.
+20. Private actor memory growth may be actor-requested or VM-triggered, always passes through the memory governor, and may be denied.
+21. Private committed capacity and synchronized shared memory consume the same parent runtime memory budget.
 
 ## Deployment matrix
 
@@ -135,18 +138,34 @@ Actor failures are fail-stop in this layer. The actor ref retains the failure ca
 
 ## Private actor memory confinement
 
-A private actor/worker receives one `ActorMemorySlice` owned by its `ActorId`. Because the actor and worker are the same lifetime/execution entity, private memory never migrates to another worker.
+A private actor/worker receives one `ActorMemorySlice` owned by its `ActorId`. Because the actor and worker are the same lifetime/execution entity, private memory never moves to another worker.
+
+Private memory tracks three separate quantities:
+
+- **used bytes** — live actor-state and mailbox reservations;
+- **committed bytes** — capacity the VM has granted to that actor/worker;
+- **hard limit** — the actor's `IsolatePolicy.maxHeapBytes()` ceiling.
+
+The default initial commitment is **1 MiB**. Growth is elastic and geometric in at-least-1-MiB quanta: 1 MiB -> 2 MiB -> 4 MiB -> 8 MiB and so on, bounded by the actor hard limit and the parent runtime budget.
+
+Growth is two-way:
+
+1. **actor-requested** — the owning actor/worker may call `requestAdditionalMemory(bytes)` and receives an explicit approved/denied `MemoryGrowthResult`;
+2. **VM-triggered** — an allocation crossing committed capacity requests required growth automatically, and crossing the configured high-water mark (80% by default) requests best-effort proactive growth.
+
+Every growth request passes through the host `MemoryGovernor`. The governor can reject growth because of process pressure, tenant quotas, supervisor policy, deployment limits, or other runtime conditions. It can only make policy stricter: it cannot exceed the per-actor or parent runtime ceilings.
+
+Private committed capacity—not merely live used bytes—competes with `Shared<T>`, `SyncCell<T>`, shared mailboxes, and other synchronized shared memory under the parent actor-memory ceiling. This prevents large populations of idle actors from promising more memory than the runtime can honor.
 
 Private mailbox admission is:
 
 1. reject explicitly shared mutable handles such as `SyncCell<T>`;
 2. isolation-copy/freeze the message graph;
 3. conservatively estimate its logical Oreslang heap size;
-4. reserve those bytes against the destination actor slice and the parent runtime budget;
-5. enqueue only after both reservations succeed;
+4. grow committed capacity through the VM governor when the message would exceed current headroom;
+5. reserve the message bytes and enqueue only after memory admission succeeds;
 6. release transient mailbox bytes after the mailbox turn completes.
 
-Persistent generated actor state reserves from the same slice. Actor teardown closes the entire slice, so leaked host-side reservation handles cannot keep a dead actor's memory budget alive.
+Persistent generated actor state reserves from the same slice. Actor teardown occurs on the actor/worker and releases both live usage and all remaining committed capacity.
 
-The current reference backend uses actor-ID guarded private storage/accounting. A physical-memory backend may create an actor-owned confined arena on the actor/worker virtual thread (for example `Arena.ofConfined()` on a compatible FFM target) or use a separate Graal/native isolate. Either way, the owner remains the actor/worker; OS carrier-thread identity is irrelevant.
-
+The current reference backend uses actor-ID guarded direct storage. A physical-memory backend may create an actor-owned confined arena on the actor/worker virtual thread (for example `Arena.ofConfined()` on a compatible FFM target) or use a separate Graal/native isolate. In either backend, the owner is the actor/worker; JVM OS carrier-thread identity is irrelevant.

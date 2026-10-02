@@ -1439,7 +1439,12 @@ public final class TypeChecker {
             if (receiver instanceof Named named) {
                 Ast.ClassDecl klass = findClass(named.name());
                 if (klass != null) {
-                    Type field = findFieldType(klass, member.member(), named, new LinkedHashSet<>());
+                    Type field = findFieldType(
+                            klass,
+                            member.member(),
+                            named,
+                            isDirectSelfReceiver(member.receiver()),
+                            new LinkedHashSet<>());
                     if (field != null) return field;
                     List<Ast.MethodDecl> methods = findMethodsByName(klass, member.member(), new LinkedHashSet<>());
                     if (methods.size() == 1) {
@@ -1797,7 +1802,12 @@ public final class TypeChecker {
         if (receiver instanceof Named named) {
             Ast.ClassDecl klass = findClass(named.name());
             if (klass != null) {
-                Type field = findFieldType(klass, member.member(), named, new LinkedHashSet<>());
+                Type field = findFieldType(
+                        klass,
+                        member.member(),
+                        named,
+                        isDirectSelfReceiver(member.receiver()),
+                        new LinkedHashSet<>());
                 if (field != null) return field;
             }
         }
@@ -2030,10 +2040,15 @@ public final class TypeChecker {
         return false;
     }
 
+    private static boolean isDirectSelfReceiver(Ast.Expr receiver) {
+        return receiver instanceof Ast.NameExpr name && name.name().equals("self");
+    }
+
     private Type findFieldType(
             Ast.ClassDecl klass,
             String name,
             Type receiverType,
+            boolean directSelfReceiver,
             Set<Ast.ClassDecl> seen) {
         if (!seen.add(klass)) return null;
         Type self = receiverType == null ? nominalClassType(klass) : receiverType;
@@ -2044,7 +2059,7 @@ public final class TypeChecker {
 
         for (Ast.FieldDecl field : klass.fields()) {
             if (field.name().equals(name)) {
-                if (activeTraitOwner != null) {
+                if (activeTraitOwner != null && directSelfReceiver) {
                     if (!field.composed() || !activeTraitOwner.equals(field.compositionOwner())) {
                         throw new IllegalArgumentException(
                                 "trait '" + activeTraitOwner + "' cannot access host or foreign trait state field '" + name + "'");
@@ -2069,7 +2084,7 @@ public final class TypeChecker {
 
             Type parentType = resolve(parentRef, Set.copyOf(klass.genericParameters()), self);
             if (!substitutions.isEmpty()) parentType = substituteGenerics(parentType, substitutions);
-            Type result = findFieldType(parent, name, parentType, seen);
+            Type result = findFieldType(parent, name, parentType, directSelfReceiver, seen);
             if (result != null) {
                 seen.remove(klass);
                 return result;

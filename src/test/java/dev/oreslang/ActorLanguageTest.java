@@ -320,6 +320,30 @@ final class ActorLanguageTest {
     }
 
     @Test
+    void ordinaryMutableMessageIsCopiedIntoActorOwnership() throws Exception {
+        String output = run("""
+                fnc worker(Array<String> mut message) => void {
+                  message[0] = "actor";
+                  stdio.stdout.write(message[0]);
+                  return;
+                }
+
+                pub routine main() => void {
+                  let values = arr["sender"];
+                  val worker_ref = actor.spawn(worker);
+                  actor.send(worker_ref, values);
+                  actor.stop(worker_ref);
+                  actor.join(worker_ref);
+                  stdio.stdout.write(":");
+                  stdio.stdout.write(values[0]);
+                  return;
+                }
+                """);
+
+        assertEquals("actor:sender", output);
+    }
+
+    @Test
     void literalSingletonNameCannotChangeItsActorContract() {
         Exception failure = assertThrows(Exception.class, () -> run("""
                 fnc strings(String message) => void {

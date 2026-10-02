@@ -474,7 +474,7 @@ final class ActorRuntimeHardeningTest {
                         }
                     });
 
-            ref.send(shared);
+            runtime.sendShared(ref, shared);
             assertTrue(runtime.stop(ref));
             assertTrue(runtime.join(ref, Duration.ofSeconds(2)));
             assertTrue(checked.await(1, TimeUnit.SECONDS));

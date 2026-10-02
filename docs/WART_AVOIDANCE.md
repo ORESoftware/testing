@@ -71,6 +71,12 @@ Guest recursion must not inherit the JVM stack as an undocumented language limit
 
 This guard is a safety mechanism, not the long-term performance model. Tail-recursive code should eventually lower to a trampoline/loop so Erlang-style constant-stack recursion can be supported without exposing backend stack behavior.
 
+## Defer/unwind contract
+
+Deferred actions execute in strict LIFO order and **all registered defers are attempted** during ordinary return or application-error unwinding. One failing cleanup must not skip later cleanups. If the body already failed, that primary failure is preserved and cleanup failures are attached as suppressed causes; if the body was returning normally, a cleanup failure prevents the return.
+
+Security denial and forced scheduler/context cancellation are control-boundary events, not application exceptions. Once one of those forced-stop conditions is active, remaining guest defer expressions are released without executing arbitrary additional guest work. Semantic resources that must survive forced cancellation therefore require runtime-owned cleanup, not correctness that depends solely on guest `defer`.
+
 ## Resource-lifecycle contract
 
 Correctness must not depend on GC/finalizers closing semantic resources. Actor stop/join is explicit, monitors are accounted, hot-reload generations use leases and retained-generation caps, contexts close deterministically, and future sockets/files/database handles must follow explicit ownership.

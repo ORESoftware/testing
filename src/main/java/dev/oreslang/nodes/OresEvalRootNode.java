@@ -204,22 +204,49 @@ public final class OresEvalRootNode extends RootNode {
         private void executeBlock(List<Ast.Stmt> statements, Env parent) {
             Env env = new Env(parent);
             ArrayDeque<DeferredAction> deferred = new ArrayDeque<>();
+            RuntimeException bodyOutcome = null;
             try {
                 for (Ast.Stmt stmt : statements) executeStatement(stmt, env, deferred);
-            } finally {
-                try {
-                    while (!deferred.isEmpty()) {
-                        DeferredAction action = deferred.pop();
-                        try {
-                            eval(action.expression(), action.environment());
-                        } finally {
-                            action.environment().release();
-                        }
-                    }
-                } finally {
-                    env.release();
-                }
+            } catch (RuntimeException outcome) {
+                bodyOutcome = outcome;
             }
+
+            RuntimeException cleanupFailure = null;
+            boolean forcedStop = bodyOutcome instanceof CancellationException
+                    || bodyOutcome instanceof SecurityException;
+
+            try {
+                while (!deferred.isEmpty()) {
+                    DeferredAction action = deferred.pop();
+                    try {
+                        if (!forcedStop) {
+                            context.schedulerSafepoint();
+                            eval(action.expression(), action.environment());
+                        }
+                    } catch (RuntimeException failure) {
+                        if (cleanupFailure == null) cleanupFailure = failure;
+                        else if (cleanupFailure != failure) cleanupFailure.addSuppressed(failure);
+                        if (failure instanceof CancellationException || failure instanceof SecurityException) {
+                            forcedStop = true;
+                        }
+                    } finally {
+                        action.environment().release();
+                    }
+                }
+            } finally {
+                env.release();
+            }
+
+            if (bodyOutcome != null) {
+                if (bodyOutcome instanceof ReturnSignal && cleanupFailure != null) {
+                    throw cleanupFailure;
+                }
+                if (cleanupFailure != null && cleanupFailure != bodyOutcome) {
+                    bodyOutcome.addSuppressed(cleanupFailure);
+                }
+                throw bodyOutcome;
+            }
+            if (cleanupFailure != null) throw cleanupFailure;
         }
 
         private void executeStatement(Ast.Stmt stmt, Env env, ArrayDeque<DeferredAction> deferred) {
@@ -262,10 +289,7 @@ public final class OresEvalRootNode extends RootNode {
             if (stmt instanceof Ast.TryStmt tried) {
                 try { executeBlock(tried.body(), env); }
                 catch (ReturnSignal signal) { throw signal; }
-                catch (RuntimeException failure) {
-                    if (failure instanceof CancellationException || failure instanceof SecurityException) {
-                        throw failure;
-                    }
+                catch (OresRuntimeException failure) {
                     Env catchEnv = new Env(env);
                     try {
                         catchEnv.define(tried.errorName(), failure, Ast.BindingKind.VAL);
@@ -345,7 +369,7 @@ public final class OresEvalRootNode extends RootNode {
                     Object receiver = eval(target.receiver(), env);
                     if (receiver instanceof OresObject object) {
                         if (object.readOnlyShared) {
-                            throw new IllegalStateException("cannot mutate a process.share_readonly class value");
+                            throw new OresRuntimeException("cannot mutate a process.share_readonly class value");
                         }
                         if (!object.fields.containsKey(target.member())) throw new IllegalArgumentException("unknown field " + target.member());
                         object.fields.put(target.member(), value);
@@ -355,15 +379,23 @@ public final class OresEvalRootNode extends RootNode {
                 }
                 if (assignment.target() instanceof Ast.IndexExpr target) {
                     Object receiver = eval(target.receiver(), env);
-                    Object index = eval(target.index(), env);
-                    if (!(index instanceof Number number)) throw new IllegalArgumentException("index must be an integer");
-                    int i = Math.toIntExact(number.longValue());
+                    int index = checkedIndex(eval(target.index(), env));
                     if (receiver instanceof List<?> raw) {
                         @SuppressWarnings("unchecked") List<Object> list = (List<Object>) raw;
-                        list.set(i, value);
-                        return value;
+                        try {
+                            list.set(index, value);
+                            return value;
+                        } catch (IndexOutOfBoundsException bounds) {
+                            throw new OresRuntimeException(
+                                    "list index out of bounds: " + index,
+                                    bounds);
+                        } catch (UnsupportedOperationException readonly) {
+                            throw new OresRuntimeException(
+                                    "cannot mutate a read-only/shared list",
+                                    readonly);
+                        }
                     }
-                    throw new IllegalArgumentException("indexed assignment requires a mutable array/list");
+                    throw new OresRuntimeException("indexed assignment requires a mutable array/list");
                 }
                 throw new IllegalArgumentException("unsupported assignment target");
             }
@@ -406,12 +438,16 @@ public final class OresEvalRootNode extends RootNode {
             if (expr instanceof Ast.MemberExpr member) return member(eval(member.receiver(), env), member.member());
             if (expr instanceof Ast.IndexExpr indexed) {
                 Object receiver = eval(indexed.receiver(), env);
-                Object index = eval(indexed.index(), env);
-                if (!(index instanceof Number number)) throw new IllegalArgumentException("index must be an integer");
-                int i = Math.toIntExact(number.longValue());
-                if (receiver instanceof List<?> list) return list.get(i);
-                if (receiver instanceof Object[] array) return array[i];
-                throw new IllegalArgumentException("value is not indexable: " + receiver);
+                int index = checkedIndex(eval(indexed.index(), env));
+                try {
+                    if (receiver instanceof List<?> list) return list.get(index);
+                    if (receiver instanceof Object[] array) return array[index];
+                } catch (IndexOutOfBoundsException bounds) {
+                    throw new OresRuntimeException(
+                            "index out of bounds: " + index,
+                            bounds);
+                }
+                throw new OresRuntimeException("value is not indexable");
             }
             if (expr instanceof Ast.NewExpr created) {
                 Ast.ClassDecl klass = findClass(created.type().name());
@@ -458,6 +494,36 @@ public final class OresEvalRootNode extends RootNode {
                 return new LambdaValue(lambda, captured, nonLexical);
             }
             throw new IllegalArgumentException("unsupported expression " + expr);
+        }
+
+        private int checkedIndex(Object value) {
+            if (!(value instanceof Byte || value instanceof Short
+                    || value instanceof Integer || value instanceof Long)) {
+                throw new OresRuntimeException("index must be an integer");
+            }
+            long raw = ((Number) value).longValue();
+            try {
+                return Math.toIntExact(raw);
+            } catch (ArithmeticException outOfRange) {
+                throw new OresRuntimeException(
+                        "index is outside the supported collection range: " + raw,
+                        outOfRange);
+            }
+        }
+
+        private <T> T guestRuntimeBoundary(
+                String api,
+                java.util.function.Supplier<T> operation) {
+            try {
+                return operation.get();
+            } catch (OresRuntimeException | SecurityException | CancellationException failure) {
+                throw failure;
+            } catch (IllegalArgumentException | IllegalStateException failure) {
+                String detail = failure.getMessage();
+                throw new OresRuntimeException(
+                        detail == null || detail.isBlank() ? api + " failed" : api + ": " + detail,
+                        failure);
+            }
         }
 
         private Object member(Object receiver, String name) {
@@ -784,16 +850,18 @@ public final class OresEvalRootNode extends RootNode {
                 Object initialArgument = stateful ? args.get(1) : null;
                 long initialStateBytes = stateful ? estimateActorStateBytes(initialArgument) : 0L;
                 Object initialState = stateful ? actorOwnedInitialState(initialArgument) : null;
-                ActorRuntime.ActorRef<Object> ref = context.actors().spawnOwned(
-                        context.isolatePolicy(),
-                        initialStateBytes,
-                        actorProtocol(handler),
-                        () -> statefulBehavior(
-                                handler,
-                                stateful,
-                                initialState,
+                ActorRuntime.ActorRef<Object> ref = guestRuntimeBoundary(
+                        "actor.spawn",
+                        () -> context.actors().spawnOwned(
+                                context.isolatePolicy(),
                                 initialStateBytes,
-                                initialArgument instanceof ActorRuntime.Shared<?>));
+                                actorProtocol(handler),
+                                () -> statefulBehavior(
+                                        handler,
+                                        stateful,
+                                        initialState,
+                                        initialStateBytes,
+                                        initialArgument instanceof ActorRuntime.Shared<?>)));
                 return new GuestActorRef(ref);
             }
 
@@ -810,17 +878,19 @@ public final class OresEvalRootNode extends RootNode {
                 Object initialArgument = stateful ? args.get(2) : null;
                 long initialStateBytes = stateful ? estimateActorStateBytes(initialArgument) : 0L;
                 Object initialState = stateful ? actorOwnedInitialState(initialArgument) : null;
-                ActorRuntime.ActorRef<Object> ref = context.actors().spawnSingletonOwned(
-                        name,
-                        initialStateBytes,
-                        singletonContract(handler, stateful, initialArgument),
-                        actorProtocol(handler),
-                        () -> statefulBehavior(
-                                handler,
-                                stateful,
-                                initialState,
+                ActorRuntime.ActorRef<Object> ref = guestRuntimeBoundary(
+                        "actor.singleton",
+                        () -> context.actors().spawnSingletonOwned(
+                                name,
                                 initialStateBytes,
-                                initialArgument instanceof ActorRuntime.Shared<?>));
+                                singletonContract(handler, stateful, initialArgument),
+                                actorProtocol(handler),
+                                () -> statefulBehavior(
+                                        handler,
+                                        stateful,
+                                        initialState,
+                                        initialStateBytes,
+                                        initialArgument instanceof ActorRuntime.Shared<?>)));
                 return new GuestActorRef(ref);
             }
 
@@ -1035,26 +1105,36 @@ public final class OresEvalRootNode extends RootNode {
             private Object send(List<Object> args) {
                 context.requireCapability(IsolatePolicy.Capability.ACTOR_SEND, "actor.send");
                 requireTwo(args, "actor.send");
-                context.actors().send(actorRef(args.getFirst()), args.get(1));
-                return null;
+                return guestRuntimeBoundary("actor.send", () -> {
+                    context.actors().send(actorRef(args.getFirst()), args.get(1));
+                    return null;
+                });
             }
 
             private Object stop(List<Object> args) {
                 context.requireCapability(IsolatePolicy.Capability.ACTOR_CONTROL, "actor.stop");
                 requireOne(args, "actor.stop");
-                return context.actors().stop(actorRef(args.getFirst()));
+                return guestRuntimeBoundary(
+                        "actor.stop",
+                        () -> context.actors().stop(actorRef(args.getFirst())));
             }
 
             private Object join(List<Object> args) {
                 context.requireCapability(IsolatePolicy.Capability.ACTOR_CONTROL, "actor.join");
                 requireOne(args, "actor.join");
-                return context.actors().join(actorRef(args.getFirst()), context.isolatePolicy().maxWallTime());
+                return guestRuntimeBoundary(
+                        "actor.join",
+                        () -> context.actors().join(
+                                actorRef(args.getFirst()),
+                                context.isolatePolicy().maxWallTime()));
             }
 
             private Object status(List<Object> args) {
                 context.requireCapability(IsolatePolicy.Capability.ACTOR_CONTROL, "actor.status");
                 requireOne(args, "actor.status");
-                return context.actors().snapshot(actorRef(args.getFirst())).asMap();
+                return guestRuntimeBoundary(
+                        "actor.status",
+                        () -> context.actors().snapshot(actorRef(args.getFirst())).asMap());
             }
 
             private Object gc(List<Object> args) {
@@ -1072,9 +1152,11 @@ public final class OresEvalRootNode extends RootNode {
                 ActorRuntime.ActorRef<Object> watcher = args.size() == 2
                         ? actorRef(args.get(1))
                         : context.actors().<Object>currentActorRef()
-                            .orElseThrow(() -> new IllegalStateException(
+                            .orElseThrow(() -> new OresRuntimeException(
                                     "actor.monitor(target) must run inside an actor; use actor.monitor(target, watcher) from control code"));
-                return new GuestMonitorRef(context.actors().monitor(watcher, target));
+                return guestRuntimeBoundary(
+                        "actor.monitor",
+                        () -> new GuestMonitorRef(context.actors().monitor(watcher, target)));
             }
 
             private Object demonitor(List<Object> args) {
@@ -1086,15 +1168,18 @@ public final class OresEvalRootNode extends RootNode {
                 ActorRuntime.ActorRef<Object> watcher = args.size() == 2
                         ? actorRef(args.get(1))
                         : context.actors().<Object>currentActorRef()
-                            .orElseThrow(() -> new IllegalStateException(
+                            .orElseThrow(() -> new OresRuntimeException(
                                     "actor.demonitor(monitor) must run inside an actor; use actor.demonitor(monitor, watcher) from control code"));
-                return context.actors().demonitor(watcher, monitor);
+                return guestRuntimeBoundary(
+                        "actor.demonitor",
+                        () -> context.actors().demonitor(watcher, monitor));
             }
 
             private Object self() {
                 context.requireCapability(IsolatePolicy.Capability.ACTOR_SEND, "actor.self");
                 ActorRuntime.ActorRef<Object> ref = context.actors().<Object>currentActorRef()
-                        .orElseThrow(() -> new IllegalStateException("actor.self is only available while handling an actor message"));
+                        .orElseThrow(() -> new OresRuntimeException(
+                                "actor.self is only available while handling an actor message"));
                 return new GuestActorRef(ref);
             }
 
@@ -1199,7 +1284,9 @@ public final class OresEvalRootNode extends RootNode {
                     case "borrow", "borrow_mut", "take", "copy" -> value;
                     case "share" -> {
                         context.requireCapability(IsolatePolicy.Capability.ACTOR_SHARE_READONLY, "share");
-                        yield context.actors().shareReadonly(value);
+                        yield guestRuntimeBoundary(
+                                "share",
+                                () -> context.actors().shareReadonly(value));
                     }
                     default -> throw new IllegalArgumentException("unknown ownership intrinsic " + name);
                 };
@@ -1575,10 +1662,18 @@ public final class OresEvalRootNode extends RootNode {
         private Object write(List<Object> args){context.requireCapability(IsolatePolicy.Capability.STDOUT,"stdio.stdout.write");requireOne(args,"stdio.stdout.write");context.output().print(String.valueOf(args.getFirst()));context.output().flush();return null;}
         private Object println(List<Object> args){context.requireCapability(IsolatePolicy.Capability.STDOUT,"stdio.stdout.println");requireOne(args,"stdio.stdout.println");context.output().println(String.valueOf(args.getFirst()));return null;}
     }
-    private record ProcessFacade(OresContext context) {
+    private final class ProcessFacade {
+        private final OresContext context;
+        private ProcessFacade(OresContext context){this.context=context;}
         private String contextId(){context.requireCapability(IsolatePolicy.Capability.PROCESS_INFO,"process.context_id");return context.contextId().toString();}
         private Map<String,Object> descriptor(){context.requireCapability(IsolatePolicy.Capability.PROCESS_INFO,"process.descriptor");return context.processDescriptor();}
-        private Object shareReadonly(List<Object> args){context.requireCapability(IsolatePolicy.Capability.ACTOR_SHARE_READONLY,"process.share_readonly");requireOne(args,"process.share_readonly");return context.actors().shareReadonly(args.getFirst());}
+        private Object shareReadonly(List<Object> args){
+            context.requireCapability(IsolatePolicy.Capability.ACTOR_SHARE_READONLY,"process.share_readonly");
+            requireOne(args,"process.share_readonly");
+            return guestRuntimeBoundary(
+                    "process.share_readonly",
+                    () -> context.actors().shareReadonly(args.getFirst()));
+        }
         private Object gc(List<Object> args){context.requireCapability(IsolatePolicy.Capability.GC_CONTROL,"process.gc");requireZero(args,"process.gc");return context.gc().collect();}
     }
     private static long saturatingAdd(long left, long right) {

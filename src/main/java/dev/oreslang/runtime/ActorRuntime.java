@@ -216,11 +216,19 @@ public final class ActorRuntime implements AutoCloseable {
             ActorRuntime.this.send(this, message);
         }
 
+        public void sendShared(Shared<? extends M> message) {
+            ActorRuntime.this.sendShared(this, message);
+        }
+
         public ActorSnapshot snapshot() {
             return ActorRuntime.this.snapshot(this);
         }
 
         public SendResult trySend(M message) { return ActorRuntime.this.trySend(this, message); }
+
+        public SendResult trySendShared(Shared<? extends M> message) {
+            return ActorRuntime.this.trySendShared(this, message);
+        }
 
         @Override
         public String toString() {
@@ -581,6 +589,23 @@ public final class ActorRuntime implements AutoCloseable {
     public <M> void send(ActorRef<M> ref, M message) {
         SendResult result = trySend(ref, message);
         if (result != SendResult.SENT) throw sendFailure(ref, result);
+    }
+
+    /**
+     * Typed zero-copy/read-only transport for an ActorRef<T>. Shared<T> is a
+     * send-time handle; the receiving actor still observes T, not Shared<T>.
+     */
+    public <M> void sendShared(ActorRef<M> ref, Shared<? extends M> message) {
+        SendResult result = trySendShared(ref, message);
+        if (result != SendResult.SENT) throw sendFailure(ref, result);
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public <M> SendResult trySendShared(ActorRef<M> ref, Shared<? extends M> message) {
+        java.util.Objects.requireNonNull(message, "message");
+        // The private transport path deliberately accepts the Shared wrapper;
+        // protocol validation observes its underlying T before admission.
+        return trySend((ActorRef) ref, (Object) message);
     }
 
     @SuppressWarnings("unchecked")

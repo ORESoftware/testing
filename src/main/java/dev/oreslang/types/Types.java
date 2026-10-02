@@ -48,6 +48,8 @@ public final class Types {
     public static boolean isAssignable(Type from, Type to) {
         Objects.requireNonNull(from);
         Objects.requireNonNull(to);
+        from = canonicalBuiltin(from);
+        to = canonicalBuiltin(to);
         if (from == Unknown.INSTANCE || to == Unknown.INSTANCE) return true;
         if (to instanceof Generic || from instanceof Generic) return true;
         if (from.equals(to)) return true;
@@ -96,6 +98,20 @@ public final class Types {
         }
 
         return numericWidening(from, to);
+    }
+
+    private static Type canonicalBuiltin(Type type) {
+        if (!(type instanceof Named named) || !named.arguments().isEmpty()) return type;
+        return switch (named.name()) {
+            case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint", "bigint" -> Primitive.INT;
+            case "f32", "f64", "float" -> Primitive.FLOAT;
+            case "decimal" -> Primitive.DECIMAL;
+            case "complex64", "complex128", "complex" -> Primitive.COMPLEX;
+            case "bool", "Bool" -> Primitive.BOOL;
+            case "str", "string", "String" -> Primitive.STRING;
+            case "void" -> Primitive.VOID;
+            default -> type;
+        };
     }
 
     private static boolean numericWidening(Type from, Type to) {

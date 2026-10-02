@@ -484,6 +484,10 @@ public final class EffectChecker {
 
         if (expr instanceof Ast.MemberExpr member) {
             scanExpr(member.receiver(), current, scope);
+            if (isBoundMethodExtraction(member, current, scope)) {
+                addEffect(current, Effect.ALLOC,
+                        "bound method extraction '" + renderCallee(member) + "'");
+            }
             return;
         }
 
@@ -702,6 +706,66 @@ public final class EffectChecker {
         }
         for (Ast.FieldDecl field : klass.fields()) result.put(field.name(), field);
         return List.copyOf(result.values());
+    }
+
+    private boolean isBoundMethodExtraction(
+            Ast.MemberExpr member,
+            Callable current,
+            Scope scope) {
+        Ast.ClassDecl owner = null;
+
+        if (member.receiver() instanceof Ast.NameExpr name) {
+            Ast.TypeRef variableType = scope.lookup(name.name());
+            if (variableType != null) {
+                owner = classForType(variableType, current.module(), scope);
+            } else if (name.name().equals("self") && current.ownerClass() != null) {
+                owner = current.ownerClass();
+            } else {
+                // A bare class/module namespace is not an instance-bound method
+                // value. Static function handles may lower without receiver
+                // capture and are outside the bound-method allocation rule.
+                return false;
+            }
+        } else {
+            owner = classForType(
+                    inferType(member.receiver(), current, scope),
+                    current.module(),
+                    scope);
+        }
+
+        if (owner == null) return false;
+        if (findField(
+                owner,
+                member.member(),
+                current.module(),
+                scope,
+                java.util.Collections.newSetFromMap(new IdentityHashMap<>())) != null) {
+            return false;
+        }
+
+        return hasInstanceMethodNamed(
+                owner,
+                member.member(),
+                current.module(),
+                java.util.Collections.newSetFromMap(new IdentityHashMap<>()));
+    }
+
+    private boolean hasInstanceMethodNamed(
+            Ast.ClassDecl owner,
+            String name,
+            String module,
+            Set<Ast.ClassDecl> seen) {
+        if (!seen.add(owner)) return false;
+        for (Callable callable : methodsByClass.getOrDefault(owner, List.of())) {
+            if (!callable.isStatic() && callable.name().equals(name)) return true;
+        }
+        for (Ast.TypeRef parentRef : owner.parents()) {
+            Ast.ClassDecl parent = resolveClass(parentRef.name(), module, null);
+            if (parent != null && hasInstanceMethodNamed(parent, name, module, seen)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private ResolvedMethod resolveMethodCall(

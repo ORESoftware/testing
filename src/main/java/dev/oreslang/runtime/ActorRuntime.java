@@ -2200,7 +2200,7 @@ public final class ActorRuntime implements AutoCloseable {
         for (ActorCell<?> cell : snapshot) cell.stop();
 
         // Every cell owns its actor/worker thread. stop() interrupts that exact
-        // worker; there is no shared dispatcher pool to shut down.
+        // worker; there is no second Oreslang scheduling layer to shut down.
 
         long deadline = System.nanoTime() + CLOSE_WAIT_NANOS;
         boolean interrupted = false;

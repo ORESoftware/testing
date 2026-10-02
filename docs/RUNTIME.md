@@ -116,7 +116,7 @@ For each spawned actor the runtime creates one long-lived virtual thread:
 - the actor/worker owns one mailbox;
 - the same actor/worker processes every message for that actor;
 - only one message handler executes at a time;
-- private and shared are memory/capability modes, not different dispatcher pools;
+- private and shared are memory/capability modes; they do not change the one-actor/one-worker identity;
 - stopping an actor interrupts that actor's own worker;
 - destroying the actor ends that worker and reclaims actor-owned runtime resources.
 

@@ -1532,6 +1532,17 @@ public final class TraitComposer {
                                 .map(argument -> substitute(argument, substitutions))
                                 .toList());
             }
+            if (expression instanceof Ast.StructInitExpr initialized) {
+                return new Ast.StructInitExpr(
+                        initialized.type() == null
+                                ? null
+                                : substitute(initialized.type(), substitutions),
+                        initialized.fields().stream()
+                                .map(field -> new Ast.ObjectField(
+                                        field.name(),
+                                        substitute(field.value(), substitutions)))
+                                .toList());
+            }
             if (expression instanceof Ast.AwaitExpr awaited) {
                 return new Ast.AwaitExpr(
                         substitute(awaited.expression(), substitutions));

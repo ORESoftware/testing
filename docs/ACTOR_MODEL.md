@@ -46,8 +46,7 @@ A graceful stop permanently closes admission before requesting termination. If
 the mailbox is already full, the actor drains only already-admitted messages and
 then exits; a full queue cannot cancel the stop request.
 
-`SENT` means admitted to the mailbox, not processed. Delivery/processing
-acknowledgement must be an explicit protocol message.
+`SENT` means admitted to the mailbox, not processed. Actor execution may race with the sender after admission. `join` after stop/termination, or an explicit request/reply/ack protocol, is the synchronization point; source code and tests must never infer receiver execution order from `send` alone.
 
 ## Freezing rules
 

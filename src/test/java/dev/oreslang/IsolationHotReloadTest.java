@@ -45,6 +45,7 @@ final class IsolationHotReloadTest {
                 64L * 1024L * 1024L,
                 77,
                 9,
+                5,
                 Duration.ofSeconds(12),
                 false);
 
@@ -54,6 +55,7 @@ final class IsolationHotReloadTest {
         assertEquals(policy.maxHeapBytes(), parsed.maxHeapBytes());
         assertEquals(77, parsed.maxMailboxMessages());
         assertEquals(9, parsed.maxActors());
+        assertEquals(5, parsed.maxAsyncTasks());
         assertEquals(Duration.ofSeconds(12), parsed.maxWallTime());
         assertEquals(policy.capabilities(), parsed.capabilities());
     }

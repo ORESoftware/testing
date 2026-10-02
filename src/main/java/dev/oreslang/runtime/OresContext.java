@@ -152,6 +152,8 @@ public final class OresContext implements AutoCloseable {
                 Map.entry("active_actors", actors.activeActorCount()),
                 Map.entry("active_monitors", actors.activeMonitorCount()),
                 Map.entry("max_actors", isolatePolicy.maxActors()),
+                Map.entry("active_async_tasks", activeAsyncTasks()),
+                Map.entry("max_async_tasks", isolatePolicy.maxAsyncTasks()),
                 Map.entry("actor_heap_backend", "logical_jvm"),
                 Map.entry("actor_physical_heap_isolation", false),
                 Map.entry("manual_gc_requests", gc.requests()));

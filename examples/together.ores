@@ -1,0 +1,15 @@
+define module x
+
+  define class y
+
+  end
+
+end
+
+pub routine main() => void {
+
+  val y = new x.y();
+
+  stdio.stdout.write(y)
+
+}

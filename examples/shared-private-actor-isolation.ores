@@ -1,0 +1,83 @@
+import fnc {actor_label} from "./actor-isolation-support.ores";
+
+define class CounterState
+  pub let int value = 10;
+end
+
+// SHARED actor:
+// - owns normal mailbox-confined fields like local_count
+// - may also use explicit synchronized shared memory via SharedMutex<T>
+shared actor SharedCounter {
+  let int local_count = 0;
+  let SharedMutex<CounterState> shared_count =
+      SharedMutex.new(new CounterState());
+
+  pub fnc increment() => void {
+    self.local_count = self.local_count + 1;
+
+    // SharedMutex<T> is a Copy-like synchronized capability. Bind the handle
+    // locally before entering the lexical protected-borrow callback.
+    val shared_count = self.shared_count;
+
+    shared_count.with_lock(|counter| -> {
+      counter.value = counter.value + 1;
+      return;
+    });
+
+    return;
+  }
+
+  pub fnc local_value() => int {
+    return self.local_count;
+  }
+
+  pub fnc actor_kind() => String {
+    return actor_label(true);
+  }
+}
+
+// PRIVATE / isolated actor:
+// - unqualified "actor" means private
+// - owns its mutable state exclusively
+// - receives a private actor memory slice at runtime
+// - SHARED_MEMORY capability is stripped from this actor domain
+actor PrivateCounter {
+  let int value = 10;
+
+  pub fnc increment() => void {
+    self.value = self.value + 1;
+    return;
+  }
+
+  pub fnc current() => int {
+    return self.value;
+  }
+
+  pub fnc actor_kind() => String {
+    return actor_label(false);
+  }
+}
+
+/*
+ * Intentionally ILLEGAL Oreslang:
+ *
+ * A private actor cannot declare or use SharedMutex<T>, because private actor
+ * capability admission removes SHARED_MEMORY before checking its fields,
+ * method signatures, and method bodies.
+ *
+ * actor BrokenPrivateCounter {
+ *   let SharedMutex<CounterState> shared_count =
+ *       SharedMutex.new(new CounterState());
+ *
+ *   pub fnc increment_shared() => void {
+ *     self.shared_count.with_lock(|counter| -> {
+ *       counter.value = counter.value + 1;
+ *       return;
+ *     });
+ *     return;
+ *   }
+ * }
+ *
+ * The compiler/runtime must reject that actor instead of silently sharing
+ * mutable memory with the shared actor domain.
+ */

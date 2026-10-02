@@ -418,6 +418,31 @@ final class TraitCompositionTest {
     }
 
     @Test
+    void traitGenericSubstitutionRewritesCallableLocalTypes() {
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
+                define module model as
+                  define trait LocalFactory<T> as
+                    pub make(T value) => T {
+                      struct Box {
+                        item: T;
+                      }
+                      val Box box = Box { item = value };
+                      return box.item;
+                    }
+                  end
+
+                  define class IntFactory with LocalFactory<int> as
+                  end
+
+                  pub fnc run() => int {
+                    val factory = new IntFactory();
+                    return factory.make(7);
+                  }
+                end
+                """)));
+    }
+
+    @Test
     void traitNamesShareTheTypeNamespace() {
         IllegalArgumentException error = assertThrows(
                 IllegalArgumentException.class,

@@ -18,7 +18,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -198,6 +200,7 @@ public final class ActorRuntime implements AutoCloseable {
         private final ActorId id;
         private final UUID ownerRuntimeId;
         private final Protocol<M> protocol;
+        private final CompletableFuture<Void> terminated = new CompletableFuture<>();
 
         private ActorRef(ActorId id, Protocol<M> protocol) {
             this.id = id;
@@ -458,6 +461,7 @@ public final class ActorRuntime implements AutoCloseable {
 
     private void removeActorCell(ActorId id, ActorCell<?> cell) {
         if (actors.remove(id, cell)) releaseActorSlot();
+        cell.ref.terminated.complete(null);
     }
 
     private void requireOwnedRef(ActorRef<?> ref, String api) {
@@ -764,17 +768,16 @@ public final class ActorRuntime implements AutoCloseable {
         if (ref.id().equals(currentActor.get())) {
             throw new IllegalStateException("an actor cannot join itself");
         }
-        ActorCell<?> cell = actors.get(ref.id());
-        if (cell == null) return true;
-        Thread thread = cell.thread;
-        if (thread == null) return true;
         try {
-            long millis = durationToMillisSaturated(timeout);
-            thread.join(millis);
-            return !thread.isAlive();
+            ref.terminated.get(durationToNanosSaturated(timeout), TimeUnit.NANOSECONDS);
+            return true;
+        } catch (TimeoutException timedOut) {
+            return false;
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
             return false;
+        } catch (ExecutionException impossible) {
+            throw new IllegalStateException("actor termination signal failed unexpectedly", impossible.getCause());
         }
     }
 

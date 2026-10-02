@@ -31,6 +31,7 @@ public final class OresContext implements AutoCloseable {
     private final AtomicLong schedulerSafepoints = new AtomicLong();
     private final AtomicBoolean closed = new AtomicBoolean();
     private final ConcurrentHashMap<CompletableFuture<?>, Thread> asyncTasks = new ConcurrentHashMap<>();
+    private final ThreadLocal<Long> asyncDeadlineNanos = new ThreadLocal<>();
     private final Semaphore asyncPermits;
     private final IsolatePolicy isolatePolicy;
     private final ExecutionProfile executionProfile;
@@ -44,7 +45,7 @@ public final class OresContext implements AutoCloseable {
         this.executionProfile = IsolatePolicy.executionProfileFromApplicationArguments(env.getApplicationArguments());
         this.actors = new ActorRuntime(isolatePolicy);
         this.gc = new GcController(actors);
-        this.asyncPermits = new Semaphore(Math.max(1, isolatePolicy.maxActors()), true);
+        this.asyncPermits = new Semaphore(Math.max(1, isolatePolicy.maxAsyncTasks()), true);
     }
 
     public static OresContext get(Node node) {
@@ -72,6 +73,11 @@ public final class OresContext implements AutoCloseable {
      */
     public void schedulerSafepoint() {
         schedulerSafepoints.incrementAndGet();
+        Long asyncDeadline = asyncDeadlineNanos.get();
+        if (asyncDeadline != null && System.nanoTime() - asyncDeadline >= 0L) {
+            throw new java.util.concurrent.CancellationException(
+                    "async task exceeded its wall-time policy");
+        }
         actors.schedulerSafepoint();
     }
 
@@ -87,18 +93,20 @@ public final class OresContext implements AutoCloseable {
         if (closed.get()) throw new java.util.concurrent.CancellationException("Oreslang context is closed");
         if (!asyncPermits.tryAcquire()) {
             throw new IllegalStateException(
-                    "async task limit exceeded for isolate: maxAsyncTasks=" + isolatePolicy.maxActors());
+                    "async task limit exceeded for isolate: maxAsyncTasks=" + isolatePolicy.maxAsyncTasks());
         }
 
         CompletableFuture<T> future = new CompletableFuture<>();
         try {
             Thread thread = Thread.ofVirtual().name("ores-async-" + contextId).unstarted(() -> {
+                asyncDeadlineNanos.set(deadlineAfter(isolatePolicy.maxWallTime()));
                 try {
                     if (closed.get()) throw new java.util.concurrent.CancellationException("Oreslang context is closing");
                     future.complete(task.call());
                 } catch (Throwable failure) {
                     future.completeExceptionally(failure);
                 } finally {
+                    asyncDeadlineNanos.remove();
                     asyncTasks.remove(future);
                     asyncPermits.release();
                 }
@@ -120,6 +128,17 @@ public final class OresContext implements AutoCloseable {
 
     public int activeAsyncTasks() {
         return asyncTasks.size();
+    }
+
+    private static long deadlineAfter(java.time.Duration duration) {
+        long delta;
+        try {
+            delta = Math.max(1L, duration.toNanos());
+        } catch (ArithmeticException overflow) {
+            delta = Long.MAX_VALUE / 4L;
+        }
+        delta = Math.min(delta, Long.MAX_VALUE / 4L);
+        return System.nanoTime() + delta;
     }
 
     public Map<String, Object> processDescriptor() {

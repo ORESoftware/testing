@@ -183,6 +183,76 @@ final class OwnershipAndClosureTest {
     }
 
     @Test
+    void deferCapturesCopyValuesAtRegistrationTime() throws Exception {
+        String output = run("""
+                pub routine main() => void {
+                  let int x = 1;
+                  defer stdio.stdout.write(x);
+                  x = 2;
+                  stdio.stdout.write(x);
+                  return;
+                }
+                """);
+        assertEquals("21", output);
+    }
+
+    @Test
+    void deferOwnsMoveOnlyCapturesImmediately() {
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class,
+                () -> TypeChecker.check(Parser.parse("""
+                        define class Box
+                          pub let String value = "x";
+                        end
+
+                        fnc cleanup(Box box) => void { return; }
+                        fnc consume(Box box) => void { return; }
+
+                        pub routine main() => void {
+                          let Box box = new Box();
+                          defer cleanup(box);
+                          consume(box);
+                          return;
+                        }
+                        """)));
+        assertTrue(error.getMessage().contains("moved value 'box'"));
+    }
+
+    @Test
+    void deferCannotCaptureBorrowedOrDirectlyMutatedBindings() {
+        IllegalArgumentException borrowed = assertThrows(
+                IllegalArgumentException.class,
+                () -> TypeChecker.check(Parser.parse("""
+                        define class Box
+                          pub let String value = "x";
+                        end
+
+                        fnc inspect(Borrow<Box> box) => void { return; }
+
+                        pub routine main() => void {
+                          let Box box = new Box();
+                          val Borrow<Box> view = borrow(box);
+                          defer inspect(view);
+                          return;
+                        }
+                        """)));
+        assertTrue(borrowed.getMessage().contains("defer"));
+        assertTrue(borrowed.getMessage().contains("borrow"));
+
+        IllegalArgumentException write = assertThrows(
+                IllegalArgumentException.class,
+                () -> TypeChecker.check(Parser.parse("""
+                        pub routine main() => void {
+                          let int x = 1;
+                          defer x = 2;
+                          return;
+                        }
+                        """)));
+        assertTrue(write.getMessage().contains("defer"));
+        assertTrue(write.getMessage().contains("mutate"));
+    }
+
+    @Test
     void malformedBorrowTypesGetCompilerDiagnostics() {
         IllegalArgumentException missing = assertThrows(
                 IllegalArgumentException.class,

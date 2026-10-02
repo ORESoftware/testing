@@ -97,19 +97,29 @@ does not weaken Oreslang ownership, actor, or capability rules.
 
 ## Async contract
 
-An `async fnc` or async method returns `Future<T>` at the call boundary while
-its body is type-checked as returning `T`.
+An `async fnc` or async static method returns `Future<T>` at the call boundary while
+its body is type-checked as returning `T`. Async instance methods remain rejected
+until receiver ownership across task lifetime is explicit.
 
 `await` accepts only `Future<T>` and yields `T`.
 
 The reference runtime executes async work on virtual threads, but those threads
-are not exposed to guest code. Task admission is bounded per isolate and live
-tasks are registered with the context so shutdown interrupts them instead of
-leaking background work.
+are not exposed to guest code. Task admission is bounded per isolate, bound
+futures are must-consume resources, compiler-inserted safepoints enforce the
+isolate wall-time budget, and live tasks are registered with the context so
+shutdown interrupts them instead of leaking background work.
 
 Async failure remains attached to the future. Await unwraps the original runtime
 cause when possible rather than exposing Java `CompletionException`/
 `ExecutionException` wrappers as Oreslang semantics.
+
+## Deferred cleanup contract
+
+`defer` captures its referenced bindings at registration time. Move-only values
+transfer into the deferred action immediately; borrowed captures and direct
+mutation of captured bindings are rejected. This avoids both use-after-move and
+late-binding cleanup behavior where later assignments unexpectedly change what
+the deferred operation observes.
 
 ## Arithmetic contract
 

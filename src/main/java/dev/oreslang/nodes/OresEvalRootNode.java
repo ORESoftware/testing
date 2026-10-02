@@ -6,6 +6,7 @@ import com.oracle.truffle.api.nodes.RootNode;
 import dev.oreslang.OresLanguage;
 import dev.oreslang.ast.Ast;
 import dev.oreslang.runtime.OresContext;
+import dev.oreslang.runtime.OresRuntimeException;
 import dev.oreslang.runtime.ActorRuntime;
 import dev.oreslang.runtime.CapabilityChecker;
 import dev.oreslang.runtime.IsolatePolicy;
@@ -94,7 +95,14 @@ public final class OresEvalRootNode extends RootNode {
         private Object execute(Object[] arguments) {
             Ast.FunctionDecl main = findFunction("main");
             if (main == null) return null;
-            return callFunction(main, List.of(arguments));
+            Object result = callFunction(main, List.of(arguments));
+            if (main.async()) {
+                if (!(result instanceof CompletionStage<?> stage)) {
+                    throw new IllegalStateException("async main did not produce a Future");
+                }
+                return awaitStage(stage);
+            }
+            return result;
         }
 
         private Object callFunction(Ast.FunctionDecl fn, List<?> args) {
@@ -168,19 +176,26 @@ public final class OresEvalRootNode extends RootNode {
 
         private void executeBlock(List<Ast.Stmt> statements, Env parent) {
             Env env = new Env(parent);
-            ArrayDeque<Ast.Expr> deferred = new ArrayDeque<>();
+            ArrayDeque<DeferredAction> deferred = new ArrayDeque<>();
             try {
                 for (Ast.Stmt stmt : statements) executeStatement(stmt, env, deferred);
             } finally {
                 try {
-                    while (!deferred.isEmpty()) eval(deferred.pop(), env);
+                    while (!deferred.isEmpty()) {
+                        DeferredAction action = deferred.pop();
+                        try {
+                            eval(action.expression(), action.environment());
+                        } finally {
+                            action.environment().release();
+                        }
+                    }
                 } finally {
                     env.release();
                 }
             }
         }
 
-        private void executeStatement(Ast.Stmt stmt, Env env, ArrayDeque<Ast.Expr> deferred) {
+        private void executeStatement(Ast.Stmt stmt, Env env, ArrayDeque<DeferredAction> deferred) {
             if (stmt instanceof Ast.BindingStmt binding) {
                 if (binding.initializer() instanceof Ast.LambdaExpr) {
                     env.reserve(binding.name(), binding.kind());
@@ -206,7 +221,10 @@ public final class OresEvalRootNode extends RootNode {
             }
             if (stmt instanceof Ast.ReturnStmt ret) throw new ReturnSignal(ret.value() == null ? null : eval(ret.value(), env));
             if (stmt instanceof Ast.ExprStmt expression) { eval(expression.expression(), env); return; }
-            if (stmt instanceof Ast.DeferStmt defer) { deferred.push(defer.expression()); return; }
+            if (stmt instanceof Ast.DeferStmt defer) {
+                deferred.push(new DeferredAction(defer.expression(), env.snapshot()));
+                return;
+            }
             if (stmt instanceof Ast.IfStmt ifStmt) {
                 for (Ast.IfBranch branch : ifStmt.branches()) {
                     if (truth(eval(branch.condition(), env))) { executeBlock(branch.body(), env); return; }
@@ -248,7 +266,7 @@ public final class OresEvalRootNode extends RootNode {
             if (stmt instanceof Ast.ForStmt loop) {
                 Env loopEnv = new Env(env);
                 try {
-                    if (loop.initializer() != null) executeStatement(loop.initializer(), loopEnv, new ArrayDeque<>());
+                    if (loop.initializer() != null) executeStatement(loop.initializer(), loopEnv, new ArrayDeque<DeferredAction>());
                     while (loop.condition() == null || truth(eval(loop.condition(), loopEnv))) {
                         context.schedulerSafepoint();
                         executeBlock(loop.body(), loopEnv);
@@ -814,7 +832,7 @@ public final class OresEvalRootNode extends RootNode {
                             || value instanceof java.math.BigDecimal;
                     case "complex64", "complex128", "complex" -> value instanceof Number || value instanceof Complex;
                     case "bool", "Bool" -> value instanceof Boolean;
-                    case "string", "String" -> value instanceof String;
+                    case "str", "string", "String" -> value instanceof String;
                     case "Array", "List" -> {
                         if (!(value instanceof List<?> list)) yield false;
                         if (type.arguments().size() != 1 || type.arguments().getFirst().inferArguments()) yield true;
@@ -1209,29 +1227,47 @@ public final class OresEvalRootNode extends RootNode {
             boolean integral = isIntegral(a) && isIntegral(b);
             if (integral) {
                 long x = a.longValue(), y = b.longValue();
-                try {
-                    return switch (op) {
-                        case '+' -> Math.addExact(x, y);
-                        case '-' -> Math.subtractExact(x, y);
-                        case '*' -> Math.multiplyExact(x, y);
-                        case '/' -> {
-                            if (y == 0L) throw new ArithmeticException("Oreslang integer division by zero");
-                            if (x == Long.MIN_VALUE && y == -1L) {
-                                throw new ArithmeticException(
-                                        "Oreslang integer overflow for " + x + " / " + y);
-                            }
-                            yield x / y;
+                return switch (op) {
+                    case '+' -> {
+                        try {
+                            yield Math.addExact(x, y);
+                        } catch (ArithmeticException overflow) {
+                            throw new OresRuntimeException(
+                                    "Oreslang integer overflow for " + x + " + " + y,
+                                    overflow);
                         }
-                        case '%' -> {
-                            if (y == 0L) throw new ArithmeticException("Oreslang integer remainder by zero");
-                            yield x % y;
+                    }
+                    case '-' -> {
+                        try {
+                            yield Math.subtractExact(x, y);
+                        } catch (ArithmeticException overflow) {
+                            throw new OresRuntimeException(
+                                    "Oreslang integer overflow for " + x + " - " + y,
+                                    overflow);
                         }
-                        default -> throw new IllegalArgumentException("bad numeric operator");
-                    };
-                } catch (ArithmeticException overflow) {
-                    throw new ArithmeticException(
-                            "Oreslang integer overflow for " + x + " " + op + " " + y);
-                }
+                    }
+                    case '*' -> {
+                        try {
+                            yield Math.multiplyExact(x, y);
+                        } catch (ArithmeticException overflow) {
+                            throw new OresRuntimeException(
+                                    "Oreslang integer overflow for " + x + " * " + y,
+                                    overflow);
+                        }
+                    }
+                    case '/' -> {
+                        if (y == 0L) throw new OresRuntimeException("Oreslang integer division by zero");
+                        if (x == Long.MIN_VALUE && y == -1L) {
+                            throw new OresRuntimeException("Oreslang integer overflow for " + x + " / " + y);
+                        }
+                        yield x / y;
+                    }
+                    case '%' -> {
+                        if (y == 0L) throw new OresRuntimeException("Oreslang integer remainder by zero");
+                        yield x % y;
+                    }
+                    default -> throw new IllegalArgumentException("bad numeric operator");
+                };
             }
             double x = a.doubleValue(), y = b.doubleValue();
             return switch (op) { case '+' -> x + y; case '-' -> x - y; case '*' -> x * y; case '/' -> x / y; case '%' -> x % y; default -> throw new IllegalArgumentException("bad numeric operator"); };
@@ -1244,8 +1280,9 @@ public final class OresEvalRootNode extends RootNode {
                 try {
                     return Math.negateExact(integer);
                 } catch (ArithmeticException overflow) {
-                    throw new ArithmeticException(
-                            "Oreslang integer overflow for unary - on " + integer);
+                    throw new OresRuntimeException(
+                            "Oreslang integer overflow for unary - on " + integer,
+                            overflow);
                 }
             }
             if (value instanceof Number number) return -number.doubleValue();
@@ -1264,6 +1301,8 @@ public final class OresEvalRootNode extends RootNode {
         private List<?> asSequence(Object value) { if (value instanceof List<?> l) return l; if (value instanceof Object[] a) return List.of(a); throw new IllegalArgumentException("value is not destructurable"); }
         private String display(Object value) { return value instanceof Complex c ? c.toString() : String.valueOf(value); }
     }
+
+    private record DeferredAction(Ast.Expr expression, Env environment) { }
 
     @FunctionalInterface
     private interface Invokable {

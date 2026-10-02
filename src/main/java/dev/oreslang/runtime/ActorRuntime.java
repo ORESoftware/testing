@@ -170,7 +170,14 @@ public final class ActorRuntime implements AutoCloseable {
     }
 
     public enum SendResult {
-        SENT, MAILBOX_FULL, RUNTIME_CLOSED, UNKNOWN_ACTOR, FOREIGN_RUNTIME, PROTOCOL_MISMATCH
+        SENT,
+        MAILBOX_FULL,
+        MAILBOX_MEMORY_EXCEEDED,
+        ACTOR_STOPPING,
+        RUNTIME_CLOSED,
+        UNKNOWN_ACTOR,
+        FOREIGN_RUNTIME,
+        PROTOCOL_MISMATCH
     }
 
     @FunctionalInterface
@@ -556,6 +563,9 @@ public final class ActorRuntime implements AutoCloseable {
         if (child.maxActors() > policyCeiling.maxActors()) {
             throw new SecurityException("child actor maxActors exceeds parent policy");
         }
+        if (child.maxAsyncTasks() > policyCeiling.maxAsyncTasks()) {
+            throw new SecurityException("child actor maxAsyncTasks exceeds parent policy");
+        }
         if (child.maxWallTime().compareTo(policyCeiling.maxWallTime()) > 0) {
             throw new SecurityException("child actor wall-time limit exceeds parent policy");
         }
@@ -586,7 +596,7 @@ public final class ActorRuntime implements AutoCloseable {
 
         Envelope envelope = prepareEnvelope(cell, message);
         if (!protocolAccepts(ref.protocol(), envelope.value())) return SendResult.PROTOCOL_MISMATCH;
-        return cell.offer(envelope) ? SendResult.SENT : SendResult.MAILBOX_FULL;
+        return cell.offer(envelope);
     }
 
     private static boolean protocolAccepts(Protocol<?> protocol, Object value) {
@@ -608,6 +618,15 @@ public final class ActorRuntime implements AutoCloseable {
                         + failure.type() + ": " + failure.message());
             }
         }
+        if (result == SendResult.MAILBOX_MEMORY_EXCEEDED) {
+            return new IllegalStateException("actor mailbox memory admission failed for " + ref);
+        }
+        if (result == SendResult.MAILBOX_FULL) {
+            return new IllegalStateException("actor mailbox is full for " + ref);
+        }
+        if (result == SendResult.ACTOR_STOPPING) {
+            return new IllegalStateException("actor is stopping and no longer accepts messages: " + ref);
+        }
         return new IllegalStateException("actor send failed for " + ref + ": " + result);
     }
 
@@ -617,9 +636,6 @@ public final class ActorRuntime implements AutoCloseable {
         if (message instanceof Shared<?> shared) {
             if (!runtimeId.equals(shared.runtimeId())) {
                 throw new SecurityException("Shared value was minted by another runtime/isolate");
-            }
-            if (shared.estimatedBytes() > cell.policy.maxHeapBytes()) {
-                throw new IllegalArgumentException("shared message exceeds actor heap policy");
             }
             deliveryValue = shared.value();
             mailboxBytes = SHARED_HANDLE_BYTES;
@@ -1190,21 +1206,27 @@ public final class ActorRuntime implements AutoCloseable {
             thread = Thread.ofVirtual().name("ores-actor-" + ref.id().value()).start(this::run);
         }
 
-        private synchronized boolean offer(Envelope envelope) {
-            if (state == ActorState.STOPPING || state == ActorState.STOPPED || state == ActorState.FAILED) return false;
+        private synchronized SendResult offer(Envelope envelope) {
+            if (state == ActorState.STOPPING || state == ActorState.STOPPED || state == ActorState.FAILED) {
+                return SendResult.ACTOR_STOPPING;
+            }
             long next;
             do {
                 long current = mailboxBytes.get();
-                if (envelope.bytes() > maxMailboxBytes - current) return false;
+                if (envelope.bytes() > maxMailboxBytes - current) {
+                    return SendResult.MAILBOX_MEMORY_EXCEEDED;
+                }
                 next = current + envelope.bytes();
                 long liveBytes = safeAdd(ownedStateBytes.get(), activeMessageBytes.get());
-                if (liveBytes > policy.maxHeapBytes() - next) return false;
+                if (liveBytes > policy.maxHeapBytes() - next) {
+                    return SendResult.MAILBOX_MEMORY_EXCEEDED;
+                }
                 if (mailboxBytes.compareAndSet(current, next)) break;
             } while (true);
 
-            if (mailbox.offer(envelope)) return true;
+            if (mailbox.offer(envelope)) return SendResult.SENT;
             mailboxBytes.addAndGet(-envelope.bytes());
-            return false;
+            return SendResult.MAILBOX_FULL;
         }
 
         @SuppressWarnings("unchecked")

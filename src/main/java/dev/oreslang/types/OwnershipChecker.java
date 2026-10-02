@@ -145,7 +145,7 @@ public final class OwnershipChecker {
             return;
         }
         if (stmt instanceof Ast.DeferStmt defer) {
-            checkExpr(defer.expression(), scope, false);
+            checkDeferred(defer.expression(), scope);
             return;
         }
         if (stmt instanceof Ast.IfStmt conditional) {
@@ -307,7 +307,16 @@ public final class OwnershipChecker {
             for (Ast.Expr arg : created.arguments()) checkExpr(arg, scope, true);
             return new ValueInfo(created.type(), ValueKind.MOVE_ONLY, null);
         }
-        if (expr instanceof Ast.AwaitExpr awaited) return checkExpr(awaited.expression(), scope, consuming);
+        if (expr instanceof Ast.AwaitExpr awaited) {
+            ValueInfo future = checkExpr(awaited.expression(), scope, true);
+            Ast.TypeRef resultType = future.type;
+            if (resultType != null
+                    && resultType.name().equals("Future")
+                    && resultType.arguments().size() == 1) {
+                resultType = resultType.arguments().getFirst();
+            }
+            return new ValueInfo(resultType, kindOfType(resultType), null);
+        }
         if (expr instanceof Ast.ListExpr list) {
             for (Ast.Expr item : list.elements()) checkExpr(item, scope, true);
             return new ValueInfo(Ast.TypeRef.simple("Array"), ValueKind.MOVE_ONLY, null);
@@ -578,6 +587,40 @@ public final class OwnershipChecker {
         else owner.immutableBorrows++;
     }
 
+    private void checkDeferred(Ast.Expr expression, Scope scope) {
+        CaptureSet captures = new CaptureSet();
+        scanExpr(expression, Set.of(), scope, null, captures, false);
+
+        for (Capture capture : captures.values.values()) {
+            VarState source = capture.source;
+            source.debugName = capture.name;
+            requireUsable(source, capture.name, capture.write);
+
+            if (source.kind == ValueKind.IMM_BORROW
+                    || source.kind == ValueKind.MUT_BORROW
+                    || source.type.isBorrow()) {
+                throw error(
+                        "defer cannot capture borrowed value '" + capture.name
+                                + "'; defer an owned value or perform the borrowed operation before scope exit");
+            }
+            if (capture.write) {
+                throw error(
+                        "defer cannot directly mutate captured binding '" + capture.name
+                                + "'; move owned cleanup state into a cleanup function instead");
+            }
+        }
+
+        // Validate the deferred expression before transferring ownership.
+        checkExpr(expression, scope, false);
+
+        for (Capture capture : captures.values.values()) {
+            VarState source = capture.source;
+            if (source.kind == ValueKind.MOVE_ONLY && !source.moved) {
+                move(source, capture.name);
+            }
+        }
+    }
+
     private ValueInfo checkLambda(Ast.LambdaExpr lambda, Scope outer, String recursiveBinding) {
         boolean nonLexical = lambda.nonLexical() || outer.descendantsNonLexical();
         CaptureSet captures = nonLexical ? new CaptureSet() : collectCaptures(lambda, outer, recursiveBinding);
@@ -836,7 +879,7 @@ public final class OwnershipChecker {
         return switch (type.name()) {
             case "i8","i16","i32","i64","u8","u16","u32","u64","int","uint","bigint",
                     "f32","f64","float","decimal","complex64","complex128","complex",
-                    "bool","Bool","string","String","void","ActorRef","MonitorRef","Shared" -> true;
+                    "bool","Bool","str","string","String","void","ActorRef","MonitorRef","Shared" -> true;
             default -> false;
         };
     }
@@ -921,6 +964,14 @@ public final class OwnershipChecker {
             if (closed) return;
             closed = true;
             for (VarState state : locals.values()) {
+                if (!state.moved
+                        && state.type != null
+                        && state.type.name().equals("Future")
+                        && state.type.arguments().size() == 1) {
+                    throw new IllegalArgumentException(
+                            "Oreslang ownership error: Future binding '" + state.debugName
+                                    + "' leaves scope without being awaited or transferred");
+                }
                 if (state.borrowSource != null) {
                     if (state.kind == ValueKind.MUT_BORROW) state.borrowSource.mutableBorrowed = false;
                     else if (state.kind == ValueKind.IMM_BORROW) state.borrowSource.immutableBorrows--;

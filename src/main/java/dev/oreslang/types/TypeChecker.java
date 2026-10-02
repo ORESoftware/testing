@@ -646,8 +646,12 @@ public final class TypeChecker {
         }
         if (expr instanceof Ast.ListExpr list) {
             if (list.elements().isEmpty()) return new ListType(Unknown.INSTANCE);
-            Type element = typeOf(list.elements().getFirst(), env, generics, self);
-            for (int i = 1; i < list.elements().size(); i++) element = commonType(element, typeOf(list.elements().get(i), env, generics, self));
+            Type element = widenCollectionLiteral(typeOf(list.elements().getFirst(), env, generics, self));
+            for (int i = 1; i < list.elements().size(); i++) {
+                element = commonType(
+                        element,
+                        widenCollectionLiteral(typeOf(list.elements().get(i), env, generics, self)));
+            }
             return new ListType(element);
         }
         if (expr instanceof Ast.TupleExpr tuple) {
@@ -684,6 +688,13 @@ public final class TypeChecker {
         if (expression instanceof Ast.LambdaExpr lambda && expected instanceof Function fn) {
             validateLambdaAgainstExpected(lambda, fn, env, generics, self);
             return fn;
+        }
+        if (expression instanceof Ast.ListExpr list && expected instanceof ListType expectedList) {
+            for (Ast.Expr item : list.elements()) {
+                Type actual = typeOfWithExpected(item, expectedList.element(), env, generics, self);
+                requireAssignable(actual, expectedList.element(), "list element");
+            }
+            return expected;
         }
         return typeOf(expression, env, generics, self);
     }
@@ -752,6 +763,10 @@ public final class TypeChecker {
             }
         }
         throw new IllegalArgumentException("for-of requires an array/list, tuple, or a class with [Symbol.iterator]()");
+    }
+
+    private Type widenCollectionLiteral(Type type) {
+        return type instanceof StringLiteral ? Primitive.STRING : type;
     }
 
     private Type commonType(Type a, Type b) {
@@ -1048,7 +1063,7 @@ public final class TypeChecker {
             case "decimal" -> Primitive.DECIMAL;
             case "complex64", "complex128", "complex" -> Primitive.COMPLEX;
             case "bool", "Bool" -> Primitive.BOOL;
-            case "string", "String" -> Primitive.STRING;
+            case "str", "string", "String" -> Primitive.STRING;
             case "void" -> Primitive.VOID;
             case "Array", "List" -> {
                 if (!ref.inferArguments() && ref.arguments().size() != 1) throw new IllegalArgumentException(ref.name() + " requires exactly one type argument");

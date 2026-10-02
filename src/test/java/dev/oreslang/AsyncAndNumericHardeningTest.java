@@ -134,6 +134,49 @@ final class AsyncAndNumericHardeningTest {
     }
 
     @Test
+    void boundFutureMustBeAwaitedOrTransferredBeforeScopeExit() {
+        String program = """
+                define module app
+                  pub async fnc work() => int {
+                    return 1;
+                  }
+
+                  pub fnc main() => void {
+                    val pending = work();
+                    return;
+                  }
+                end
+                """;
+
+        IllegalArgumentException failure = assertThrows(
+                IllegalArgumentException.class,
+                () -> TypeChecker.check(Parser.parse(program)));
+        assertTrue(failure.getMessage().contains("Future"));
+        assertTrue(failure.getMessage().contains("awaited or transferred"));
+    }
+
+    @Test
+    void awaitConsumesFutureBindingAndProducesPayloadOwnershipType() {
+        String program = """
+                define module app
+                  pub async fnc work() => int {
+                    return 41;
+                  }
+
+                  pub fnc main() => void {
+                    val pending = work();
+                    val answer = await pending;
+                    val copy = copy(answer);
+                    stdio.println(copy + 1);
+                    return;
+                  }
+                end
+                """;
+
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse(program)));
+    }
+
+    @Test
     void futureCannotBecomeActorMessageOrSharedMemory() {
         String actorProgram = """
                 define module app

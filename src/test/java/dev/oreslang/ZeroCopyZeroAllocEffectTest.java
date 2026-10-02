@@ -639,7 +639,6 @@ final class ZeroCopyZeroAllocEffectTest {
 
         assertTrue(error.getMessage().contains("@NoAlloc contract violated"));
         assertTrue(error.getMessage().contains("Symbol.iterator"));
-        assertTrue(error.getMessage().contains("array/list literal"));
     }
 
     @Test

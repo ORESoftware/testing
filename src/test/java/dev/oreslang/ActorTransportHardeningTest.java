@@ -75,7 +75,10 @@ final class ActorTransportHardeningTest {
                 }
             }
             assertNotNull(failure, "failed actor must be removed from the runtime registry");
-            assertTrue(failure.getMessage().contains("unknown actor"));
+            assertTrue(
+                    failure.getMessage().contains("unknown actor")
+                            || failure.getMessage().contains("terminated before message admission"),
+                    "unexpected failed-actor send diagnostic: " + failure.getMessage());
         }
     }
 

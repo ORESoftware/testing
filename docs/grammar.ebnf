@@ -1,0 +1,267 @@
+(* Oreslang v0.6 concrete grammar. Semantic restrictions are described in LANGUAGE.md. *)
+
+source          = [ namespace_decl ] { import_decl } { top_level_item } EOF ;
+namespace_decl  = "namespace" IDENT ";" ;
+
+import_decl     = "import" import_spec "from" STRING_LITERAL ";" ;
+import_spec     = "*" "as" IDENT
+                | "module" import_names
+                | "class" import_names
+                | "fnc" import_names ;
+import_names    = IDENT
+                | "{" IDENT { "," IDENT } "}"
+                | "*" "as" IDENT ;
+
+top_level_item  = annotated_module_decl
+                | callable_decl
+                | class_decl
+                | interface_decl
+                | type_decl
+                | binding_decl ;
+
+annotated_module_decl = { annotation } "define" "module" IDENT
+                        { module_member } "end" ;
+
+module_member   = callable_decl
+                | class_decl
+                | interface_decl
+                | type_decl
+                | binding_decl ;
+
+visibility      = [ "pub" | "private" ] ;
+callable_modifier = "abstract" | "async" | "gpu" | "quantum" ;
+
+callable_decl   = { annotation } visibility { callable_modifier } callable_kind IDENT [ generic_params ]
+                  "(" [ param_list ] ")" return_spec block ;
+callable_kind   = "fnc" | "routine" ;
+
+class_decl      = "define" [ "abstract" ] "class" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  [ ( "implements" | "impl" ) type_ref { "," type_ref } ]
+                  { class_member } "end" ;
+
+class_member    = field_decl
+                | method_decl
+                | static_function_decl ;
+
+field_decl      = visibility binding_kind type_ref IDENT [ "=" expression ] stmt_terminator ;
+
+method_decl     = { annotation } visibility { callable_modifier } method_name [ generic_params ]
+                  method_head return_spec ( block | stmt_terminator ) ;
+method_name     = IDENT | "[" "Symbol" "." IDENT "]" ;
+method_head     = "(" [ explicit_receiver | param_list ] ")" [ "(" [ param_list ] ")" ] ;
+explicit_receiver = "self" type_ref ;
+
+static_function_decl
+                = { annotation } visibility { "static" | "gpu" | "quantum" } "fnc" IDENT [ generic_params ]
+                  "(" [ param_list ] ")" return_spec block ;
+
+interface_decl  = visibility "interface" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  interface_body
+                | "define" "interface" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  interface_body ;
+
+interface_body  = "{" { interface_member } "}"
+                | { interface_member } "end" ;
+
+interface_member= "fnc" IDENT [ generic_params ] "(" [ param_list ] ")" return_spec member_terminator
+                | IDENT ":" type_ref member_terminator
+                | [ binding_kind ] type_ref IDENT member_terminator ;
+
+type_decl       = "type" IDENT [ generic_params ] "=" type_ref stmt_terminator ;
+
+annotation      = "@" IDENT [ "<" [ type_args ] ">" | "(" [ type_args ] ")" ] ;
+return_spec     = [ "=>" type_ref ] ;
+generic_params  = "<" IDENT { "," IDENT } ">" ;
+param_list      = param { "," param } ;
+param           = type_ref [ "mut" ] IDENT
+                | "@Structural" type_ref [ "mut" ] IDENT
+                | IDENT "structural" type_ref [ "mut" ] ;
+
+binding_decl    = binding_kind [ type_ref ] IDENT "=" expression stmt_terminator ;
+binding_kind    = "val" | "const" | "let" ;
+
+destructure_stmt= [ binding_kind ] sequence_pattern "=" expression stmt_terminator
+                | [ binding_kind ] object_pattern "=" expression stmt_terminator ;
+sequence_pattern= "[" destructure_item { "," destructure_item } "]" ;
+object_pattern  = "{" destructure_item { "," destructure_item } "}" ;
+destructure_item= [ binding_kind ] IDENT | "_" ;
+
+block           = "{" { statement } "}" ;
+statement       = binding_decl
+                | destructure_stmt
+                | return_stmt
+                | if_stmt
+                | try_stmt
+                | defer_stmt
+                | for_stmt
+                | expression stmt_terminator ;
+
+return_stmt     = "return" [ expression ] stmt_terminator ;
+defer_stmt      = "defer" expression stmt_terminator ;
+
+if_stmt         = "if" condition [ ";" ] "do" { statement }
+                  { "elseif" condition [ ";" ] "do" { statement } }
+                  [ "else" { statement } ] "fi" ;
+condition       = condition_and { "|" condition_and } ;
+condition_and   = equality { "," equality } ;
+
+try_stmt        = "try" block "catch" "(" IDENT ")" block [ "finally" block ] ;
+
+for_stmt        = "for" "(" for_of_head ")" block
+                | "for" "(" [ for_init ] ";" [ expression ] ";" [ expression ] ")" block ;
+
+for_of_head     = [ binding_kind ] IDENT "of" expression ;
+for_init        = binding_kind [ type_ref ] IDENT "=" expression
+                | expression ;
+
+expression      = assignment ;
+assignment      = conditional [ "=" assignment ] ;
+conditional     = logic_or [ "?" assignment ":" conditional ] ;
+logic_or        = equality { "|" equality } ;
+equality        = comparison { ( "==" | "!=" ) comparison } ;
+comparison      = additive { ( "<" | "<=" | ">" | ">=" ) additive } ;
+additive        = multiplicative { ( "+" | "-" ) multiplicative } ;
+multiplicative  = unary { ( "*" | "/" | "%" ) unary } ;
+unary           = [ "!" | "-" | "+" | "await" ] postfix
+                | "&" [ "mut" ] unary
+                | "gpu" [ "parallel" ] unary ;
+postfix         = primary { call_suffix | member_suffix | index_suffix } ;
+call_suffix     = "(" [ argument_list ] ")" ;
+member_suffix   = "." IDENT ;
+index_suffix    = "[" expression "]" ;
+argument_list   = expression { "," expression } ;
+
+primary         = literal
+                | IDENT
+                | "self"
+                | "new" type_ref "(" [ argument_list ] ")"
+                | lambda
+                | tuple_literal
+                | array_literal
+                | legacy_array_literal
+                | object_literal
+                | "(" expression ")" ;
+
+lambda          = pipe_lambda | typed_legacy_lambda ;
+pipe_lambda     = "|" [ lambda_param { "," lambda_param } ] "|" "->" block ;
+lambda_param    = IDENT | type_ref IDENT ;
+typed_legacy_lambda
+                = "(" [ param_list ] ")" "->" block ;
+
+tuple_literal   = "(" expression "," expression { "," expression } ")" ;
+array_literal   = "arr" "[" [ expression { "," expression } ] "]" ;
+legacy_array_literal = "[" [ expression { "," expression } ] "]" ;
+object_literal  = "obj" "{" [ object_field { "," object_field } ] "}" ;
+object_field    = ( IDENT | STRING_LITERAL ) ":" expression ;
+
+literal         = INT_LITERAL | FLOAT_LITERAL | IMAG_LITERAL | STRING_LITERAL
+                | "true" | "false" ;
+
+type_ref        = type_atom { "|" type_atom } ;
+
+type_atom       = borrow_type
+                | tuple_type
+                | record_type
+                | alias_marker
+                | named_type
+                | function_type
+                | grouped_type
+                | STRING_LITERAL
+                | "self"
+                | "void"
+                | "null" ;
+
+borrow_type     = "&" [ "mut" ] type_atom ;
+tuple_type      = "[" [ type_ref { "," type_ref } ] "]" ;
+record_type     = "{" [ record_type_field { "," record_type_field } ] "}" ;
+record_type_field
+                = ( IDENT | STRING_LITERAL ) ":" type_ref ;
+alias_marker    = "type" named_type ;
+named_type      = qualified_name [ "<" [ type_args ] ">" ] ;
+function_type   = "typeof" "fnc" "(" [ function_type_params ] ")" "->" type_ref
+                | "(" [ function_type_params ] ")" "->" type_ref ;
+grouped_type    = "(" type_ref ")" ;
+function_type_params
+                = function_type_param { "," function_type_param } ;
+function_type_param
+                = type_ref [ IDENT ] ;
+
+type_args       = type_ref { "," type_ref } ;
+qualified_name  = IDENT { "." IDENT } ;
+
+(* Semicolons are recommended. stmt_terminator/member_terminator may be omitted
+   only at an unambiguous structural boundary such as immediately before
+   "}", "fi", or "end". Imports and namespace declarations keep explicit
+   semicolons in v0.4. *)
+
+stmt_terminator   = ";" | SAFE_STRUCTURAL_BOUNDARY ;
+member_terminator = ";" | INTERFACE_CLOSING_BOUNDARY ;
+
+(* Semantic restrictions:
+   - Each source file is a separately versioned compilation/code unit and is the
+     default package identity when no explicit namespace is declared.
+   - Source namespaces are flat: namespace a.b; is illegal.
+   - Modules are flat: module names are single identifiers and modules may not
+     contain modules.
+   - fnc declarations may recurse; routines may not participate in a call cycle.
+   - fnc and routine declarations do not overload.
+   - instance methods may overload only when arity differs.
+   - class-level functions use "static fnc"; they have no self receiver and are
+     dispatched through the class namespace, never through an instance.
+   - "=>" belongs to named callable return declarations.
+   - "->" belongs to function types and lambdas.
+   - In a destructure pattern, an explicit binding kind propagates to subsequent
+     unqualified names until another binding kind appears. A leading binding
+     kind (for example const [a, b]) seeds the whole pattern. "_" never binds.
+   - Sequence destructuring targets returned arrays/lists and finite tuple types;
+     object destructuring targets returned record/map-like values.
+   - Destructuring is not currently permitted in callable parameter lists.
+   - Lambdas always have braces. Non-void lambdas must use explicit return and
+     return on every path when a contextual function result type is known.
+   - named class/interface types are nominal by default.
+   - @Structural, name structural Type, or @AllowStructural(name) opt a
+     parameter into public-shape compatibility.
+   - every loop iteration contains an injected scheduler safepoint.
+   - [Symbol.iterator]() may provide iterator behavior for for-of.
+   - standalone null values are illegal.
+   - null is a type marker only directly inside Option<null>.
+   - inline obj{} / arr[] values cannot be subclassed; extend Object/List.
+   - "structural" is contextual in parameter position, not globally reserved.
+   - self is an immutable receiver borrow and cannot be rebound.
+   - Parameters are immutable by default. Type "mut" name grants mutation of an
+     owned parameter inside the callee, e.g. Bar mut b.
+   - &T is a shared immutable borrow. &mut T is an exclusive mutable borrow.
+   - Non-Copy values move through by-value bindings, arguments, and returns.
+   - Structural parameters are read-only borrowed views and do not consume the
+     passed value.
+   - A local borrow cannot escape the lifetime of its owner.
+   - Closures use lexical scoping. Mutable/non-Copy captures transfer ownership
+     into the closure environment; borrowed values cannot be captured.
+   - Class fields declared val/const are immutable; field mutation requires let
+     plus mutable owner access.
+   - gpu is a reserved execution-placement keyword. On a named fnc/static fnc it
+     targets the entire body. In expression position, gpu requires a direct lambda.
+   - quantum is a reserved whole-callable execution target for fnc/static fnc.
+     It is mutually exclusive with gpu and async and never implies CPU/GPU fallback.
+   - Canonical class/module long-form bodies use "as"; interface conformance uses
+     "is"; trait composition uses "with" in the declaration-syntax/trait stack.
+   - gpu parallel is a contextual batch form over a non-empty list/tuple literal
+     or List.of(...) containing only direct lambda literals. "parallel" remains a
+     contextual word rather than a globally reserved identifier.
+   - gpu and async cannot be combined. GPU routines, instance methods, structural
+     parameters, generics, inferred lambda parameters, tuple device-ABI parameters,
+     complex arithmetic, host borrows, host objects, strings, list/tuple allocation,
+     destructuring, for-of, await/defer/try, dynamic calls, recursion, and host/global
+     captures are rejected by the current GPU ABI.
+   - GPU callables return only a supported scalar or void. Array/List results use an
+     explicit mutable Array<T>/List<T> output parameter.
+   - A canonical top-level index loop may lower to get_global_id(0) only when mutable
+     buffer access is proven elementwise; otherwise lowering preserves single-work-item
+     semantics.
+   - GPU placement never implies stable GPU-core affinity. The backend maps work
+     to lanes/warps/work-groups. Physical multi-device affinity is a separate,
+     future execution-placement concern.
+*)

@@ -617,6 +617,46 @@ final class ZeroCopyZeroAllocEffectTest {
                 """));
     }
 
+    @Test
+    void forOfPropagatesHiddenIteratorEffects() {
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
+                check("""
+                        struct Bag {
+                          [Symbol.iterator]() => Array<int> {
+                            return arr[1, 2, 3];
+                          }
+                        }
+
+                        @NoAlloc
+                        fnc iterate(Bag bag) => int {
+                          let int total = 0;
+                          for (val item of bag) {
+                            total = total + item;
+                          }
+                          return total;
+                        }
+                        """));
+
+        assertTrue(error.getMessage().contains("@NoAlloc contract violated"));
+        assertTrue(error.getMessage().contains("Symbol.iterator"));
+        assertTrue(error.getMessage().contains("array/list literal"));
+    }
+
+    @Test
+    void forOfBuiltInArrayDoesNotInventIteratorAllocation() {
+        assertDoesNotThrow(() -> check("""
+                @NoAlloc
+                @NoCopy
+                fnc sum(Array<int> values) => int {
+                  let int total = 0;
+                  for (val item of values) {
+                    total = total + item;
+                  }
+                  return total;
+                }
+                """));
+    }
+
     private static void check(String source) {
         TypeChecker.check(Parser.parse(source));
     }

@@ -49,6 +49,7 @@ public final class TypeChecker {
     private final Set<String> ambiguousTypeAliases = new HashSet<>();
     private final Set<String> importedValues = new HashSet<>();
     private final Set<Ast.TypeAliasDecl> resolvingAliases = java.util.Collections.newSetFromMap(new IdentityHashMap<>());
+    private String resolutionModule;
 
     public static Ast.Program check(Ast.Program program) {
         TypeChecker checker = new TypeChecker();
@@ -115,17 +116,39 @@ public final class TypeChecker {
     }
 
     private void validate(Ast.Program program) {
-        for (Ast.ClassDecl klass : classOwners.keySet()) classShape(klass, new LinkedHashSet<>());
-        for (Ast.InterfaceDecl iface : interfaceOwners.keySet()) interfaceShape(iface, Set.copyOf(iface.genericParameters()), new LinkedHashSet<>());
+        for (Ast.ClassDecl klass : classOwners.keySet()) {
+            String previous = resolutionModule;
+            resolutionModule = classOwners.get(klass);
+            try {
+                classShape(klass, new LinkedHashSet<>());
+            } finally {
+                resolutionModule = previous;
+            }
+        }
+        for (Ast.InterfaceDecl iface : interfaceOwners.keySet()) {
+            String previous = resolutionModule;
+            resolutionModule = interfaceOwners.get(iface);
+            try {
+                interfaceShape(iface, Set.copyOf(iface.genericParameters()), new LinkedHashSet<>());
+            } finally {
+                resolutionModule = previous;
+            }
+        }
 
         for (Ast.ModuleDecl module : program.modules()) {
-            checkModuleAdherence(module);
-            for (Ast.Decl decl : module.declarations()) {
-                if (decl instanceof Ast.FunctionDecl fn) checkFunction(module.name(), fn);
-                else if (decl instanceof Ast.ClassDecl klass) checkClass(module.name(), klass);
-                else if (decl instanceof Ast.InterfaceDecl iface) checkInterface(iface);
-                else if (decl instanceof Ast.TypeAliasDecl alias) resolve(alias.target(), Set.copyOf(alias.genericParameters()), null);
-                else if (decl instanceof Ast.FieldDecl field) checkModuleBinding(field);
+            String previous = resolutionModule;
+            resolutionModule = module.name();
+            try {
+                checkModuleAdherence(module);
+                for (Ast.Decl decl : module.declarations()) {
+                    if (decl instanceof Ast.FunctionDecl fn) checkFunction(module.name(), fn);
+                    else if (decl instanceof Ast.ClassDecl klass) checkClass(module.name(), klass);
+                    else if (decl instanceof Ast.InterfaceDecl iface) checkInterface(iface);
+                    else if (decl instanceof Ast.TypeAliasDecl alias) resolve(alias.target(), Set.copyOf(alias.genericParameters()), null);
+                    else if (decl instanceof Ast.FieldDecl field) checkModuleBinding(field);
+                }
+            } finally {
+                resolutionModule = previous;
             }
         }
     }
@@ -1578,6 +1601,10 @@ public final class TypeChecker {
     }
 
     private Ast.TypeAliasDecl findTypeAlias(String name) {
+        if (resolutionModule != null && name.indexOf('.') < 0) {
+            Ast.TypeAliasDecl local = typeAliases.get(resolutionModule + "." + name);
+            if (local != null) return local;
+        }
         if (ambiguousTypeAliases.contains(name)) throw new IllegalArgumentException("ambiguous type alias '" + name + "'; qualify it with its module");
         return typeAliases.get(name);
     }

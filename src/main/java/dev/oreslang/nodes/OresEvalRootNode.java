@@ -11,6 +11,8 @@ import dev.oreslang.runtime.ActorRuntime;
 import dev.oreslang.runtime.CapabilityChecker;
 import dev.oreslang.runtime.IsolatePolicy;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -1203,7 +1205,7 @@ public final class OresEvalRootNode extends RootNode {
             return switch (op) {
                 case "+" -> add(left, right); case "-" -> numeric(left, right, '-'); case "*" -> numeric(left, right, '*');
                 case "/" -> numeric(left, right, '/'); case "%" -> numeric(left, right, '%');
-                case "==" -> Objects.equals(left, right); case "!=" -> !Objects.equals(left, right);
+                case "==" -> equalValues(left, right); case "!=" -> !equalValues(left, right);
                 case "<" -> compare(left, right) < 0; case "<=" -> compare(left, right) <= 0;
                 case ">" -> compare(left, right) > 0; case ">=" -> compare(left, right) >= 0;
                 default -> throw new IllegalArgumentException("unsupported operator " + op);
@@ -1270,7 +1272,29 @@ public final class OresEvalRootNode extends RootNode {
                 };
             }
             double x = a.doubleValue(), y = b.doubleValue();
-            return switch (op) { case '+' -> x + y; case '-' -> x - y; case '*' -> x * y; case '/' -> x / y; case '%' -> x % y; default -> throw new IllegalArgumentException("bad numeric operator"); };
+            if (!Double.isFinite(x) || !Double.isFinite(y)) {
+                throw new OresRuntimeException("non-finite floating-point operands are not valid ordinary Oreslang numbers");
+            }
+            if (op == '/' && y == 0.0d) {
+                throw new OresRuntimeException("Oreslang floating-point division by zero");
+            }
+            if (op == '%' && y == 0.0d) {
+                throw new OresRuntimeException("Oreslang floating-point remainder by zero");
+            }
+            double result = switch (op) {
+                case '+' -> x + y;
+                case '-' -> x - y;
+                case '*' -> x * y;
+                case '/' -> x / y;
+                case '%' -> x % y;
+                default -> throw new IllegalArgumentException("bad numeric operator");
+            };
+            if (!Double.isFinite(result)) {
+                throw new OresRuntimeException(
+                        "Oreslang floating-point operation produced a non-finite result: "
+                                + x + " " + op + " " + y);
+            }
+            return result;
         }
 
         private Object negate(Object value) {
@@ -1285,12 +1309,79 @@ public final class OresEvalRootNode extends RootNode {
                             overflow);
                 }
             }
-            if (value instanceof Number number) return -number.doubleValue();
+            if (value instanceof Number number) {
+                double result = -number.doubleValue();
+                if (!Double.isFinite(result)) {
+                    throw new OresRuntimeException("non-finite floating-point values are not valid ordinary Oreslang numbers");
+                }
+                return result;
+            }
             throw new IllegalArgumentException("unary - requires a number");
         }
 
+        private boolean equalValues(Object left, Object right) {
+            if (left == right) return true;
+            if (left == null || right == null) return false;
+
+            if ((left instanceof Number || left instanceof Complex)
+                    && (right instanceof Number || right instanceof Complex)) {
+                if (left instanceof Complex || right instanceof Complex) {
+                    Complex a = asComplex(left);
+                    Complex b = asComplex(right);
+                    return Double.compare(a.real, b.real) == 0
+                            && Double.compare(a.imaginary, b.imaginary) == 0;
+                }
+                return compareNumbers((Number) left, (Number) right) == 0;
+            }
+
+            if (left instanceof String a && right instanceof String b) return a.equals(b);
+            if (left instanceof Boolean a && right instanceof Boolean b) return a.equals(b);
+            if (left instanceof Character a && right instanceof Character b) return a.equals(b);
+
+            if (left instanceof OptionValue a && right instanceof OptionValue b) {
+                if (a.present != b.present) return false;
+                return !a.present || equalValues(a.value, b.value);
+            }
+
+            if (left instanceof List<?> a && right instanceof List<?> b) {
+                if (a.size() != b.size()) return false;
+                for (int i = 0; i < a.size(); i++) {
+                    if (!equalValues(a.get(i), b.get(i))) return false;
+                }
+                return true;
+            }
+
+            if (left instanceof Map<?, ?> a && right instanceof Map<?, ?> b) {
+                if (!a.keySet().equals(b.keySet())) return false;
+                for (Object key : a.keySet()) {
+                    if (!equalValues(a.get(key), b.get(key))) return false;
+                }
+                return true;
+            }
+
+            // Reference/capability-like guest values require an explicit
+            // identity/equality operation and therefore never fall through to
+            // JVM Object.equals() semantics.
+            return false;
+        }
+
+        private int compareNumbers(Number left, Number right) {
+            return exactDecimal(left).compareTo(exactDecimal(right));
+        }
+
+        private BigDecimal exactDecimal(Number value) {
+            if (value instanceof BigDecimal decimal) return decimal;
+            if (value instanceof BigInteger integer) return new BigDecimal(integer);
+            if (isIntegral(value)) return BigDecimal.valueOf(value.longValue());
+            double floating = value.doubleValue();
+            if (!Double.isFinite(floating)) {
+                throw new OresRuntimeException("non-finite floating-point values are not valid ordinary Oreslang numbers");
+            }
+            return BigDecimal.valueOf(floating);
+        }
+
         private int compare(Object left, Object right) {
-            if (left instanceof Number a && right instanceof Number b) return Double.compare(a.doubleValue(), b.doubleValue());
+            if (left instanceof Number a && right instanceof Number b) return compareNumbers(a, b);
             if (left instanceof String a && right instanceof String b) return a.compareTo(b);
             throw new IllegalArgumentException("values are not comparable");
         }
@@ -1379,10 +1470,21 @@ public final class OresEvalRootNode extends RootNode {
     }
 
     private record Complex(double real, double imaginary) implements ActorRuntime.Sendable {
+        private Complex {
+            if (!Double.isFinite(real) || !Double.isFinite(imaginary)) {
+                throw new OresRuntimeException("complex values must have finite real and imaginary components");
+            }
+        }
         private Complex add(Complex o){return new Complex(real+o.real,imaginary+o.imaginary);}
         private Complex sub(Complex o){return new Complex(real-o.real,imaginary-o.imaginary);}
         private Complex mul(Complex o){return new Complex(real*o.real-imaginary*o.imaginary,real*o.imaginary+imaginary*o.real);}
-        private Complex div(Complex o){double d=o.real*o.real+o.imaginary*o.imaginary;return new Complex((real*o.real+imaginary*o.imaginary)/d,(imaginary*o.real-real*o.imaginary)/d);}
+        private Complex div(Complex o){
+            double d=o.real*o.real+o.imaginary*o.imaginary;
+            if (d == 0.0d || !Double.isFinite(d)) {
+                throw new OresRuntimeException("complex division requires a finite non-zero divisor");
+            }
+            return new Complex((real*o.real+imaginary*o.imaginary)/d,(imaginary*o.real-real*o.imaginary)/d);
+        }
         @Override public Object freezeForSend(ActorRuntime.SendFreezer freezer, boolean readOnlyShared){return new Complex(real,imaginary);}
         @Override public long estimatedSendBytes(ActorRuntime.SendSizer sizer){return 32L;}
         @Override public String toString(){return real+(imaginary<0?"":"+")+imaginary+"i";}

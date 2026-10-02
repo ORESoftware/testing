@@ -253,6 +253,102 @@ final class AsyncAndNumericHardeningTest {
     }
 
     @Test
+    void numericEqualityDoesNotDependOnJvmBoxingType() throws Exception {
+        String program = """
+                define module app
+                  pub fnc main() => void {
+                    stdio.println(1 == 1.0 ? "same" : "different");
+                    stdio.println(Some(2) == Some(2) ? "option-same" : "option-different");
+                    return;
+                  }
+                end
+                """;
+
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse(program)));
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        Source source = Source.newBuilder(OresLanguage.ID, program, "numeric-equality.ores")
+                .mimeType(OresLanguage.MIME_TYPE)
+                .build();
+
+        try (Context context = Context.newBuilder(OresLanguage.ID)
+                .allowAllAccess(false)
+                .out(output)
+                .build()) {
+            context.eval(source);
+        }
+
+        String text = output.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("same"));
+        assertTrue(text.contains("option-same"));
+    }
+
+    @Test
+    void classEqualityRequiresAnExplicitFutureEqualityContract() {
+        String program = """
+                define module app
+                  define class Box
+                  end
+
+                  pub fnc main() => void {
+                    val left = new Box();
+                    val right = new Box();
+                    stdio.println(left == right);
+                    return;
+                  }
+                end
+                """;
+
+        IllegalArgumentException failure = assertThrows(
+                IllegalArgumentException.class,
+                () -> TypeChecker.check(Parser.parse(program)));
+        assertTrue(failure.getMessage().contains("equality-safe"));
+    }
+
+    @Test
+    void floatingPointExceptionalResultsAreNotHiddenValues() throws Exception {
+        String divideByZero = """
+                define module app
+                  pub fnc main() => void {
+                    stdio.println(1.0 / 0.0);
+                    return;
+                  }
+                end
+                """;
+
+        Source zeroSource = Source.newBuilder(OresLanguage.ID, divideByZero, "float-zero.ores")
+                .mimeType(OresLanguage.MIME_TYPE)
+                .build();
+
+        try (Context context = Context.newBuilder(OresLanguage.ID)
+                .allowAllAccess(false)
+                .build()) {
+            PolyglotException failure = assertThrows(PolyglotException.class, () -> context.eval(zeroSource));
+            assertTrue(failure.getMessage().contains("floating-point division by zero"));
+        }
+
+        String overflow = """
+                define module app
+                  pub fnc main() => void {
+                    stdio.println(1e308 * 1e308);
+                    return;
+                  }
+                end
+                """;
+
+        Source overflowSource = Source.newBuilder(OresLanguage.ID, overflow, "float-overflow.ores")
+                .mimeType(OresLanguage.MIME_TYPE)
+                .build();
+
+        try (Context context = Context.newBuilder(OresLanguage.ID)
+                .allowAllAccess(false)
+                .build()) {
+            PolyglotException failure = assertThrows(PolyglotException.class, () -> context.eval(overflowSource));
+            assertTrue(failure.getMessage().contains("non-finite"));
+        }
+    }
+
+    @Test
     void integerDivisionMatchesStaticIntType() throws Exception {
         String program = """
                 define module app

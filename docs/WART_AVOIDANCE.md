@@ -45,6 +45,14 @@ Do not copy pervasive null, shared mutable heaps as the concurrency default, che
 
 Oreslang uses `Option<T>`, actor-owned mutation, transparent `await` failure unwrapping, host-opt-in JVM GC hints, deny-by-default Graal capabilities, deterministic linked immutable maps, and bounded hot-reload generations with explicit leases.
 
+## Equality and numeric determinism
+
+`==` / `!=` are Oreslang operations, not aliases for JVM `Object.equals` or reference identity. Ordinary equality is currently limited to equality-safe values: numeric scalars, strings, booleans, `Option<T>`, immutable tuples, and immutable records whose members are themselves equality-safe. Mutable lists, class instances, actors/capabilities, futures, functions, and borrows require an explicit future equality/identity operation rather than inheriting Java, Go, Rust, or Erlang defaults.
+
+Mixed numeric equality is numeric rather than boxed-host-type equality: an integer and an exactly equal floating value compare equal. Comparisons use deterministic numeric conversion rather than Java wrapper-class equality.
+
+Ordinary floating/complex arithmetic does not silently manufacture `NaN` or infinities. Literal parsing and runtime arithmetic reject non-finite values and zero divisors. If Oreslang later exposes raw IEEE-754 exceptional-value semantics, that must be an explicit API/type rather than an optimization/backend accident.
+
 ## Async/task contract
 
 `async` must never mean an untracked Java thread or detached Go-style goroutine. Full async lowering must provide structured ownership/cancellation, bounded task/queue counts, preserved Oreslang stack/cause information, and source types that do not expose `CompletableFuture`, virtual-thread handles, continuations, or `Pin`.

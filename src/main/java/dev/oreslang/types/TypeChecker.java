@@ -474,7 +474,10 @@ public final class TypeChecker {
                     requireAssignable(right, Primitive.BOOL, "boolean operand");
                     yield Primitive.BOOL;
                 }
-                case "==", "!=" -> Primitive.BOOL;
+                case "==", "!=" -> {
+                    requireEqualityComparable(left, right);
+                    yield Primitive.BOOL;
+                }
                 case "<", "<=", ">", ">=" -> {
                     if (!(Types.isNumeric(left) && Types.isNumeric(right)) && !(isStringLike(left) && isStringLike(right))) {
                         throw new IllegalArgumentException("comparison operands must both be numeric or both strings");
@@ -1482,6 +1485,39 @@ public final class TypeChecker {
     private String qualifiedInterfaceName(Ast.InterfaceDecl iface) {
         String owner = interfaceOwners.get(iface);
         return owner == null || owner.equals("__root__") ? iface.name() : owner + "." + iface.name();
+    }
+
+    private void requireEqualityComparable(Type left, Type right) {
+        Type a = deref(left);
+        Type b = deref(right);
+        if (a == Unknown.INSTANCE || b == Unknown.INSTANCE) return;
+        if (Types.isNumeric(a) && Types.isNumeric(b)) return;
+        if (isStringLike(a) && isStringLike(b)) return;
+        if (a == Primitive.BOOL && b == Primitive.BOOL) return;
+
+        if (a instanceof Named an && b instanceof Named bn
+                && an.name().equals("Option") && bn.name().equals("Option")
+                && an.arguments().size() == 1 && bn.arguments().size() == 1) {
+            requireEqualityComparable(an.arguments().getFirst(), bn.arguments().getFirst());
+            return;
+        }
+
+        if (a instanceof Tuple at && b instanceof Tuple bt && at.elements().size() == bt.elements().size()) {
+            for (int i = 0; i < at.elements().size(); i++) {
+                requireEqualityComparable(at.elements().get(i), bt.elements().get(i));
+            }
+            return;
+        }
+
+        if (a instanceof Record ar && b instanceof Record br && ar.members().keySet().equals(br.members().keySet())) {
+            for (String key : ar.members().keySet()) {
+                requireEqualityComparable(ar.members().get(key), br.members().get(key));
+            }
+            return;
+        }
+
+        throw new IllegalArgumentException(
+                "==/!= require explicit equality-safe values; mutable lists, classes, actors, futures, borrows, and capabilities must use an explicit equality/identity operation");
     }
 
     private boolean assignable(Type actual, Type expected) {

@@ -1233,7 +1233,7 @@ public final class GpuKernelCompiler {
         if (literal.value() instanceof Double d) {
             if (!Double.isFinite(d)) return false;
             return switch (target.name()) {
-                case "f32" -> Float.isFinite((float) d) && (double) ((float) d) == d;
+                case "f32" -> Float.isFinite(d.floatValue()) && (double) d.floatValue() == d.doubleValue();
                 case "f64", "float" -> true;
                 default -> false;
             };

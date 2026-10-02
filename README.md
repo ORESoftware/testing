@@ -1,31 +1,39 @@
+# Oreslang
+
+Oreslang is a statically typed GraalVM/Truffle language with nominal typing by default, explicit structural-call opt-ins, actor-oriented concurrency, hot-loadable code generations, and deny-by-default isolate capabilities.
+
+This repository contains the Java/Truffle reference implementation.
+
+The language is intentionally opinionated:
+
+- static nominal typing by default, with explicit structural compatibility at selected call boundaries;
+- private functions by default (`fnc`), with `pub` for exported functions;
+- class methods omit `fnc` and have an implicit `self` receiver;
+- one return value only (tuples/arrays/records are ordinary single values);
+- `val`, `const`, and `let` are the only variable declarations;
+- actor heaps are semantically isolated: mutable values are never shared between actors, even though the Java reference runtime still uses the JVM heap as its backing store;
+- every actor has an independent logical heap budget covering persistent state, queued mailbox data, and the in-flight message; `actor.status` reports the accounting and the current `logical_jvm` backend explicitly;
+- isolates also bound total live actors with an atomic `maxActors` ceiling, so actor spawning cannot bypass sandbox resource policy;
+- ownership/move/drop semantics reclaim statically-known lifetimes early, with automatic backing GC for residual dynamic graphs and capability-gated `process.gc()` for explicit collection requests;
+- immutable/sendable values may be message-passed, and explicitly frozen regions may be shared read-only;
+- `actor.singleton(name, handler)` provides one named mutable actor without introducing shared mutable memory;
+- isolates are stricter security boundaries for FaaS/mobile workloads, with host access denied and Oreslang APIs capability-gated by default;
+- JIT, AOT/interpreter, and AOT-host + guest-JIT hybrid execution profiles;
+- file-granular incremental compilation with stable code-unit/package identities and reverse-dependency invalidation;
+- flat optional file namespaces and flat modules (neither may nest);
+- class-level `static fnc` functions separated from receiver methods;
+- first-class function aliases/types and block-only `|args| -> { ... }` lambdas;
+- lexical closures with persistent captured environments;
+- affine ownership and move checking with pointer-free `Borrow<T>` / `BorrowMut<T>` plus `borrow`, `borrow_mut`, `take`, `copy`, and `share` intrinsics; immutable-by-default parameters and `Type mut name` owned-mutation syntax;
+- hot reload creates a fresh versioned guest context/generation without requiring FFI or dynamic native libraries;
+- direct method calls reuse shared class method definitions; extracted method values bind their receiver safely without rebinding `self`;
+- multiple named modules may appear in one source file;
+- explicit `return` statements;
+- generics, tuples, arrays, complex numbers, futures/`await`, lambdas, `defer`, and `try/catch/finally` are language-level features.
+
+The first implementation is developed on a feature branch and will land with an executable Truffle skeleton, grammar/specification, examples, tests, and CI.
 
 
-### Huge performance disparity between Linux and MacOS
+## Design hardening
 
-In this case, MacOS is performing 10x or 100x faster, specifically
-for the live-mutex library code.
-
-(The disparity was originally found on Node.js version 10.1, but the same disparity also exists on Node version 9).
-
-### to run tests:
-
-1. git clone https://github.com/ORESoftware/testing.git
-
-2. `npm install`
-
-3. `node live-mutex-speed.js`
-
-
-In the live-mutex library - there is no OS specific code.
-There is no check to see which OS it's running on.
-Therefore there is simply no OS specific branching.
-
-That should mean that the live-mutex library itself is running
-that much slower on Linux/Ubuntu than MacOS.
-
-Extraordinary performance difference, not sure why.
-
-On MacOS, it takes 500ms. On Ubuntu, it takes 39,480ms, almost 100x worse performance.
-
-The library that's experiencing the massive perf difference is located here:
-https://github.com/ORESoftware/live-mutex
+See `docs/WART_AVOIDANCE.md` for the cross-language Erlang/Rust/Go/Java wart-avoidance contract used to review new language/runtime features.

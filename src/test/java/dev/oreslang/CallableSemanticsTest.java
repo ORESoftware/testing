@@ -50,6 +50,23 @@ final class CallableSemanticsTest {
     }
 
     @Test
+    void deepGuestRecursionFailsBeforeJvmStackOverflow() {
+        Exception failure = assertThrows(Exception.class, () -> run("""
+                fnc descend(int n) => int {
+                  return n == 0 ? 0 : descend(n - 1);
+                }
+
+                pub routine main() => void {
+                  stdio.stdout.write(descend(200));
+                  return;
+                }
+                """));
+
+        assertNotNull(failure.getMessage());
+        assertTrue(failure.getMessage().contains("call-depth limit"));
+    }
+
+    @Test
     void explicitNlexLambdaCannotCaptureOuterLocal() {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () ->
                 TypeChecker.check(Parser.parse("""

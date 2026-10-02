@@ -812,7 +812,7 @@ public final class ActorRuntime implements AutoCloseable {
      * acyclic immutable values.
      */
     public static Object freeze(Object value) {
-        return freezeValue(value, null, false, new IdentityHashMap<>(), 0, false, new GraphBudget());
+        return freezeValue(value, null, false, new IdentityHashMap<>(), 0, true, new GraphBudget());
     }
 
     public Object freezeForActorState(Object value) {
@@ -874,8 +874,12 @@ public final class ActorRuntime implements AutoCloseable {
         try {
             if (value instanceof List<?> list) {
                 List<Object> frozen = new ArrayList<>();
-                for (Object item : list) frozen.add(freezeValue(item, allowedRuntimeId, allowCapabilities, path, depth + 1, readOnlyShared, budget));
-                return List.copyOf(frozen);
+                for (Object item : list) {
+                    frozen.add(freezeValue(
+                            item, allowedRuntimeId, allowCapabilities,
+                            path, depth + 1, readOnlyShared, budget));
+                }
+                return readOnlyShared ? List.copyOf(frozen) : frozen;
             }
             if (value instanceof Set<?> set) {
                 java.util.LinkedHashSet<Object> frozen = new java.util.LinkedHashSet<>();
@@ -887,7 +891,7 @@ public final class ActorRuntime implements AutoCloseable {
                                 "distinct set elements collapse to the same frozen value");
                     }
                 }
-                return immutableLinkedSet(frozen);
+                return readOnlyShared ? immutableLinkedSet(frozen) : frozen;
             }
             if (value instanceof Map<?, ?> map) {
                 Map<Object, Object> frozen = new LinkedHashMap<>();
@@ -904,13 +908,17 @@ public final class ActorRuntime implements AutoCloseable {
                     }
                     frozen.put(key, item);
                 }
-                return immutableLinkedMap(frozen);
+                return readOnlyShared ? immutableLinkedMap(frozen) : frozen;
             }
             if (value.getClass().isArray()) {
                 int length = Array.getLength(value);
                 List<Object> frozen = new ArrayList<>();
-                for (int i = 0; i < length; i++) frozen.add(freezeValue(Array.get(value, i), allowedRuntimeId, allowCapabilities, path, depth + 1, readOnlyShared, budget));
-                return List.copyOf(frozen);
+                for (int i = 0; i < length; i++) {
+                    frozen.add(freezeValue(
+                            Array.get(value, i), allowedRuntimeId, allowCapabilities,
+                            path, depth + 1, readOnlyShared, budget));
+                }
+                return readOnlyShared ? List.copyOf(frozen) : frozen;
             }
             if (value instanceof Sendable sendable) {
                 Object replacement = sendable.freezeForSend(

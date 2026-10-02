@@ -56,8 +56,10 @@ public final class OresEvalRootNode extends RootNode {
         private final Map<String, Ast.FunctionDecl> functions = new LinkedHashMap<>();
         private final Map<String, Ast.ClassDecl> classes = new LinkedHashMap<>();
         private final Map<String, Ast.ModuleDecl> modules = new LinkedHashMap<>();
+        private static final int MAX_GUEST_CALL_DEPTH = 128;
         private final Set<String> ambiguousFunctions = new LinkedHashSet<>();
         private final Set<String> ambiguousClasses = new LinkedHashSet<>();
+        private final ThreadLocal<Integer> guestCallDepth = ThreadLocal.withInitial(() -> 0);
 
         private Evaluator(Ast.Program program, OresContext context) {
             this.program = program;
@@ -129,18 +131,21 @@ public final class OresEvalRootNode extends RootNode {
         }
 
         private Object callFunctionSync(Ast.FunctionDecl fn, List<?> args) {
-            Env env = new Env(null, fn.nonLexical());
-            for (int i = 0; i < fn.parameters().size(); i++) {
-                Ast.Param param = fn.parameters().get(i);
-                env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
-            }
+            enterGuestCall("function " + fn.name());
+            Env env = null;
             try {
+                env = new Env(null, fn.nonLexical());
+                for (int i = 0; i < fn.parameters().size(); i++) {
+                    Ast.Param param = fn.parameters().get(i);
+                    env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
+                }
                 executeBlock(fn.body(), env);
                 return null;
             } catch (ReturnSignal signal) {
                 return signal.value;
             } finally {
-                env.release();
+                if (env != null) env.release();
+                exitGuestCall();
             }
         }
 
@@ -156,20 +161,40 @@ public final class OresEvalRootNode extends RootNode {
         }
 
         private Object callMethodSync(OresObject receiver, Ast.MethodDecl method, List<?> args) {
-            Env env = new Env(null);
-            if (!method.isStatic()) env.define("self", receiver, Ast.BindingKind.VAL);
-            for (int i = 0; i < method.parameters().size(); i++) {
-                Ast.Param param = method.parameters().get(i);
-                env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
-            }
+            enterGuestCall("method " + method.name());
+            Env env = null;
             try {
+                env = new Env(null);
+                if (!method.isStatic()) env.define("self", receiver, Ast.BindingKind.VAL);
+                for (int i = 0; i < method.parameters().size(); i++) {
+                    Ast.Param param = method.parameters().get(i);
+                    env.define(param.name(), args.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
+                }
                 executeBlock(method.body(), env);
                 return null;
             } catch (ReturnSignal signal) {
                 return signal.value;
             } finally {
-                env.release();
+                if (env != null) env.release();
+                exitGuestCall();
             }
+        }
+
+        private void enterGuestCall(String label) {
+            context.schedulerSafepoint();
+            int depth = guestCallDepth.get();
+            if (depth >= MAX_GUEST_CALL_DEPTH) {
+                throw new OresRuntimeException(
+                        "Oreslang guest call-depth limit exceeded (" + MAX_GUEST_CALL_DEPTH + ") at " + label
+                                + "; use iteration/tail-call lowering instead of relying on the JVM stack");
+            }
+            guestCallDepth.set(depth + 1);
+        }
+
+        private void exitGuestCall() {
+            int depth = guestCallDepth.get() - 1;
+            if (depth <= 0) guestCallDepth.remove();
+            else guestCallDepth.set(depth);
         }
 
         private CompletionStage<Object> startAsync(java.util.concurrent.Callable<Object> task) {
@@ -709,19 +734,22 @@ public final class OresEvalRootNode extends RootNode {
                 if (arguments.size() != lambda.parameters().size()) {
                     throw new IllegalArgumentException("lambda arity mismatch");
                 }
-                Env local = new Env(captured, nonLexical);
-                for (int i = 0; i < lambda.parameters().size(); i++) {
-                    Ast.Param param = lambda.parameters().get(i);
-                    local.define(param.name(), arguments.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
-                }
+                enterGuestCall("lambda");
+                Env local = null;
                 try {
+                    local = new Env(captured, nonLexical);
+                    for (int i = 0; i < lambda.parameters().size(); i++) {
+                        Ast.Param param = lambda.parameters().get(i);
+                        local.define(param.name(), arguments.get(i), param.mutable() ? Ast.BindingKind.LET : Ast.BindingKind.VAL);
+                    }
                     if (lambda.expressionBody() != null) return eval(lambda.expressionBody(), local);
                     executeBlock(lambda.blockBody(), local);
                     return null;
                 } catch (ReturnSignal signal) {
                     return signal.value;
                 } finally {
-                    local.release();
+                    if (local != null) local.release();
+                    exitGuestCall();
                 }
             }
 
@@ -813,26 +841,19 @@ public final class OresEvalRootNode extends RootNode {
                 }
 
                 return switch (type.name()) {
-                    case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
-                            "int", "uint", "bigint" -> value instanceof Byte
-                                    || value instanceof Short
-                                    || value instanceof Integer
-                                    || value instanceof Long
-                                    || value instanceof java.math.BigInteger;
-                    case "f32", "f64", "float" -> value instanceof Byte
+                    case "i64", "int" -> value instanceof Byte
+                            || value instanceof Short
+                            || value instanceof Integer
+                            || value instanceof Long;
+                    case "f64", "float" -> value instanceof Byte
                             || value instanceof Short
                             || value instanceof Integer
                             || value instanceof Long
-                            || value instanceof java.math.BigInteger
                             || value instanceof Float
                             || value instanceof Double;
-                    case "decimal" -> value instanceof Byte
-                            || value instanceof Short
-                            || value instanceof Integer
-                            || value instanceof Long
-                            || value instanceof java.math.BigInteger
-                            || value instanceof java.math.BigDecimal;
-                    case "complex64", "complex128", "complex" -> value instanceof Number || value instanceof Complex;
+                    case "complex128", "complex" -> value instanceof Number || value instanceof Complex;
+                    case "i8", "i16", "i32", "u8", "u16", "u32", "u64",
+                            "uint", "bigint", "f32", "decimal", "complex64" -> false;
                     case "bool", "Bool" -> value instanceof Boolean;
                     case "str", "string", "String" -> value instanceof String;
                     case "Array", "List" -> {

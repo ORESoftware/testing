@@ -200,11 +200,19 @@ fnc lookup(bool found) => Option<int> {
 
 ## Numbers
 
-Built-in numeric families include integral, floating, decimal, and complex types. Imaginary literals use `i`:
+The reference runtime currently exposes only numeric types whose semantics it can enforce exactly:
+
+- `int` / `i64` — checked signed 64-bit integers;
+- `float` / `f64` — finite IEEE-754 binary64 values;
+- `complex` / `complex128` — finite pairs of binary64 components.
+
+Imaginary literals use `i`:
 
 ```ores
 const complex z = 3 + 4i;
 ```
+
+Names such as `i8/i16/i32`, unsigned integer families, `bigint`, `f32`, `decimal`, and `complex64` are reserved for future exact implementations and are rejected today. Oreslang does not alias those names onto Java `long`/`double` and pretend their width, range, precision, or overflow semantics exist.
 
 Numeric widening is loss-aware; real values can widen toward complex values, but silent lossy narrowing is not performed.
 

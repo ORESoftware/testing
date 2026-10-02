@@ -101,6 +101,47 @@ final class ParserTest {
     }
 
     @Test
+    void signedMinimumLiteralIsRepresentableButLargerMagnitudesAreNot() {
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
+                define module app
+                  pub fnc min_value() => int {
+                    return -9223372036854775808;
+                  }
+                end
+                """)));
+
+        IllegalArgumentException tooSmall = assertThrows(
+                IllegalArgumentException.class,
+                () -> Parser.parse("""
+                        define module app
+                          pub fnc bad() => int {
+                            return -9223372036854775809;
+                          }
+                        end
+                        """));
+        assertTrue(tooSmall.getMessage().contains("signed 64-bit"));
+    }
+
+    @Test
+    void unsupportedNumericFamiliesFailInsteadOfMasqueradingAsLongOrDouble() {
+        for (String type : java.util.List.of(
+                "i8", "i16", "i32", "u8", "u16", "u32", "u64",
+                "uint", "bigint", "f32", "decimal", "complex64")) {
+            IllegalArgumentException failure = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> TypeChecker.check(Parser.parse(
+                            "fnc bad(" + type + " value) => void { return; }")));
+            assertTrue(failure.getMessage().contains("reserved but not implemented"), type);
+        }
+
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
+                fnc supported(i64 integer_value, f64 float_value, complex128 complex_value) => void {
+                  return;
+                }
+                """)));
+    }
+
+    @Test
     void lexerRecognizesLambdaAndFatReturnArrows() {
         var tokens = new Lexer("(int x) -> x + 1; fnc f() => int { return 1; }").scan();
         assertTrue(tokens.stream().anyMatch(t -> t.type() == Token.Type.ARROW));

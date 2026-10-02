@@ -429,6 +429,63 @@ final class ActorRuntimeHardeningTest {
     }
 
     @Test
+    void ordinaryContainerMessagesBecomeActorLocalMutableCopies() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            ArrayList<String> senderValue = new ArrayList<>(List.of("sender"));
+            CountDownLatch mutated = new CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicReference<String> actorValue =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+
+            ActorRuntime.ActorRef<List<String>> ref = runtime.spawn(
+                    ActorRuntime.Protocol.ofClass("list-message", List.class),
+                    () -> (message, context) -> {
+                        message.set(0, "actor");
+                        actorValue.set(message.getFirst());
+                        mutated.countDown();
+                    });
+
+            ref.send(senderValue);
+            assertTrue(runtime.stop(ref));
+            assertTrue(runtime.join(ref, Duration.ofSeconds(2)));
+            assertTrue(mutated.await(1, TimeUnit.SECONDS));
+
+            assertEquals("actor", actorValue.get());
+            assertEquals(List.of("sender"), senderValue);
+        }
+    }
+
+    @Test
+    void sharedContainerMessagesStayDeeplyReadonly() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            ArrayList<String> senderValue = new ArrayList<>(List.of("sender"));
+            ActorRuntime.Shared<List<String>> shared = runtime.shareReadonly(senderValue);
+            CountDownLatch checked = new CountDownLatch(1);
+            AtomicInteger rejectedMutation = new AtomicInteger();
+
+            ActorRuntime.ActorRef<List<String>> ref = runtime.spawn(
+                    ActorRuntime.Protocol.ofClass("shared-list-message", List.class),
+                    () -> (message, context) -> {
+                        try {
+                            message.set(0, "actor");
+                        } catch (UnsupportedOperationException expected) {
+                            rejectedMutation.incrementAndGet();
+                        } finally {
+                            checked.countDown();
+                        }
+                    });
+
+            ref.send(shared);
+            assertTrue(runtime.stop(ref));
+            assertTrue(runtime.join(ref, Duration.ofSeconds(2)));
+            assertTrue(checked.await(1, TimeUnit.SECONDS));
+
+            assertEquals(1, rejectedMutation.get());
+            assertEquals(List.of("sender"), senderValue);
+            assertEquals(List.of("sender"), shared.value());
+        }
+    }
+
+    @Test
     void frozenMapsPreserveSourceIterationOrderDeterministically() {
         java.util.LinkedHashMap<String, Integer> source = new java.util.LinkedHashMap<>();
         source.put("zeta", 1);

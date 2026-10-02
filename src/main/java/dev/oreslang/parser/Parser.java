@@ -757,7 +757,23 @@ public final class Parser {
     }
 
     private Ast.Expr parseUnary() {
-        if (match(BANG, MINUS, PLUS)) return new Ast.UnaryExpr(previous().lexeme(), parseUnary());
+        if (match(MINUS)) {
+            if (check(INT)) {
+                Token token = advance();
+                String raw = token.lexeme().replace("_", "");
+                if (raw.equals("9223372036854775808")) {
+                    return new Ast.LiteralExpr(Long.MIN_VALUE);
+                }
+                try {
+                    return new Ast.UnaryExpr("-", new Ast.LiteralExpr(Long.parseLong(raw)));
+                } catch (NumberFormatException invalid) {
+                    throw error(token,
+                            "integer literal magnitude is outside the signed 64-bit int range");
+                }
+            }
+            return new Ast.UnaryExpr("-", parseUnary());
+        }
+        if (match(BANG, PLUS)) return new Ast.UnaryExpr(previous().lexeme(), parseUnary());
         if (match(AWAIT)) return new Ast.AwaitExpr(parseUnary());
         return parsePostfix();
     }

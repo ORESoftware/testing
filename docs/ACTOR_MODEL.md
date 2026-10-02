@@ -102,3 +102,7 @@ sandbox and capability rules.
 The separate source type-system work provides `Option`, exhaustive matching,
 ownership/borrows, explicit `any`/`unknown`, and formal-contract syntax. Those
 features complement this runtime contract rather than being reimplemented here.
+
+## Copy versus shared-readonly delivery
+
+Oreslang does not conflate message isolation with immutability. A normal send of a mutable aggregate creates a deep actor-local copy, so the receiver may mutate its copy without creating an alias back into the sender. `Shared<T>` is the separate zero-copy/read-only mechanism: its backing graph is deeply frozen and mutation is rejected. This distinction avoids both Java/Go shared-memory races and the opposite wart where a safe copied value unexpectedly becomes immutable merely because the JVM transport used an unmodifiable collection.

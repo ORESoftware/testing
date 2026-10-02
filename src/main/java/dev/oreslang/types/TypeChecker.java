@@ -1061,10 +1061,14 @@ public final class TypeChecker {
         }
 
         return switch (ref.name()) {
-            case "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint", "bigint" -> Primitive.INT;
-            case "f32", "f64", "float" -> Primitive.FLOAT;
-            case "decimal" -> Primitive.DECIMAL;
-            case "complex64", "complex128", "complex" -> Primitive.COMPLEX;
+            case "int", "i64" -> Primitive.INT;
+            case "float", "f64" -> Primitive.FLOAT;
+            case "complex", "complex128" -> Primitive.COMPLEX;
+            case "i8", "i16", "i32", "u8", "u16", "u32", "u64", "uint", "bigint", "f32", "decimal", "complex64" ->
+                    throw new IllegalArgumentException(
+                            "numeric type '" + ref.name()
+                                    + "' is reserved but not implemented with exact semantics yet; "
+                                    + "use int/i64, float/f64, or complex/complex128");
             case "bool", "Bool" -> Primitive.BOOL;
             case "str", "string", "String" -> Primitive.STRING;
             case "void" -> Primitive.VOID;

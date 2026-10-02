@@ -53,6 +53,8 @@ Mixed numeric equality is numeric rather than boxed-host-type equality: an integ
 
 Ordinary floating/complex arithmetic does not silently manufacture `NaN` or infinities. Literal parsing and runtime arithmetic reject non-finite values and zero divisors. If Oreslang later exposes raw IEEE-754 exceptional-value semantics, that must be an explicit API/type rather than an optimization/backend accident.
 
+Numeric names must not over-promise backend semantics. The current exact surface is `int/i64`, `float/f64`, and `complex/complex128`. Smaller widths, unsigned families, `bigint`, `f32`, true decimal arithmetic, and `complex64` remain rejected until their range/precision/overflow behavior is implemented rather than aliased onto JVM `long` or `double`.
+
 ## Async/task contract
 
 `async` must never mean an untracked Java thread or detached Go-style goroutine. Full async lowering must provide structured ownership/cancellation, bounded task/queue counts, preserved Oreslang stack/cause information, and source types that do not expose `CompletableFuture`, virtual-thread handles, continuations, or `Pin`.
@@ -60,6 +62,14 @@ Ordinary floating/complex arithmetic does not silently manufacture `NaN` or infi
 ## Error contract
 
 Expected failure belongs in typed values such as `Result<T,E>` / `Option<T>`. Exceptional control flow is for exceptional failures. Actor failure metadata is bounded before retention so error text cannot become an unbounded tombstone or supervision-message memory sink.
+
+Expected runtime language failures cross Truffle as Oreslang guest exceptions. Arbitrary JVM exceptions are implementation failures, not part of the source-language exception taxonomy; Graal must not report normal Oreslang arithmetic errors as "Internal GraalVM error."
+
+## Recursion and host-stack isolation
+
+Guest recursion must not inherit the JVM stack as an undocumented language limit. The reference interpreter places a conservative call-depth guard on functions, methods, and lambdas and inserts a scheduler safepoint at every guest call boundary. Deep recursion therefore fails as an Oreslang runtime error and remains cancellable rather than escaping as `StackOverflowError` or bypassing actor/async wall-time checks.
+
+This guard is a safety mechanism, not the long-term performance model. Tail-recursive code should eventually lower to a trampoline/loop so Erlang-style constant-stack recursion can be supported without exposing backend stack behavior.
 
 ## Resource-lifecycle contract
 

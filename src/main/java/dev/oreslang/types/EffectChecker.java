@@ -427,6 +427,10 @@ public final class EffectChecker {
             Scope bodyScope = new Scope(scope);
             Ast.TypeRef iterable = inferType(loop.iterable(), current, scope);
             Ast.TypeRef element = collectionElement(iterable);
+            if (element == null && iterator != null) {
+                element = iteratorElementType(
+                        iterator.callable(), iterable, current.module(), scope);
+            }
             bodyScope.define(loop.bindingName(), element == null ? Ast.TypeRef.inferred() : element);
             scanBlock(loop.body(), current, bodyScope);
             return;
@@ -1105,6 +1109,32 @@ public final class EffectChecker {
                 && left.name().equals(right.name())
                 && left.arguments().equals(right.arguments())
                 && left.inferArguments() == right.inferArguments();
+    }
+
+    private Ast.TypeRef iteratorElementType(
+            Callable iterator,
+            Ast.TypeRef receiverType,
+            String module,
+            Scope scope) {
+        Ast.TypeRef result = iterator.returnType();
+        Ast.ClassDecl owner = iterator.ownerClass();
+        if (owner != null && receiverType != null) {
+            Ast.TypeRef concrete = receiverType.isBorrow()
+                    ? receiverType.borrowedTarget()
+                    : receiverType;
+            Ast.ClassDecl receiverClass = resolveClass(concrete.name(), module, scope);
+            if (receiverClass == owner) {
+                result = substituteType(
+                        result,
+                        classGenericSubstitutions(owner, concrete));
+            } else if (!owner.genericParameters().isEmpty()) {
+                // Inherited generic iterator substitution is not yet provable
+                // from the lightweight effect-type model. Stay conservative
+                // rather than inventing a concrete loop-element type.
+                return null;
+            }
+        }
+        return collectionElement(result);
     }
 
     private static Ast.TypeRef collectionElement(Ast.TypeRef collection) {

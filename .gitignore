@@ -1,3 +1,6 @@
-node_modules
-.idea
+target/
+.idea/
+.vscode/
+*.iml
+.DS_Store
 *.log

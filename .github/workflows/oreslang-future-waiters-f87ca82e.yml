@@ -1,0 +1,165 @@
+name: oreslang-future-waiter-hardening
+
+on:
+  push:
+    branches:
+      - tmp/oreslang-future-waiters-f87ca82e-20261004
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oreslang-future-waiters-f87ca82e4aa5ff8137e6412b6c70d18878e23191
+  cancel-in-progress: false
+
+env:
+  ORESLANG_SOURCE_SHA: f87ca82e4aa5ff8137e6412b6c70d18878e23191
+  ORESLANG_SOURCE_TREE: ac80b90a3f8d2c84fe758ea36d5f1f10b7d14036
+
+jobs:
+  focused:
+    name: focused waiter lifecycle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact Oreslang source
+        uses: actions/checkout@v4
+        with:
+          repository: ores-truffle-oreslang/oreslang-source.java
+          ref: ${{ env.ORESLANG_SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Prove exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ORESLANG_SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$ORESLANG_SOURCE_TREE"
+          git status --porcelain=v1
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - name: Run focused waiter lifecycle tests
+        run: >-
+          mvn -B -ntp
+          -Dtest=OresFutureTest,OresSchedulerTest,ActorAwaitLifecycleTest,OresFuturesTest,OresObservableTest
+          test
+
+  full-jvm:
+    name: full JVM verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ores-truffle-oreslang/oreslang-source.java
+          ref: ${{ env.ORESLANG_SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Prove exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ORESLANG_SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$ORESLANG_SOURCE_TREE"
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - run: mvn -B -ntp verify
+
+  native-aot:
+    name: native AOT
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ores-truffle-oreslang/oreslang-source.java
+          ref: ${{ env.ORESLANG_SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Prove exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ORESLANG_SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$ORESLANG_SOURCE_TREE"
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - run: mvn -B -ntp -Pnative-aot -DskipTests package
+      - run: ./target/ores-aot --mode=aot --platform=linux examples/together.ores
+
+  native-hybrid:
+    name: native hybrid guest JIT
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ores-truffle-oreslang/oreslang-source.java
+          ref: ${{ env.ORESLANG_SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Prove exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ORESLANG_SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$ORESLANG_SOURCE_TREE"
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - run: mvn -B -ntp -Pnative-hybrid -DskipTests package
+      - run: ./target/ores-hybrid --mode=hybrid --platform=linux examples/together.ores
+
+  polyglot-isolate:
+    name: polyglot isolate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ores-truffle-oreslang/oreslang-source.java
+          ref: ${{ env.ORESLANG_SOURCE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Prove exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$ORESLANG_SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$ORESLANG_SOURCE_TREE"
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - run: mvn -B -ntp -Pnative-isolate -DskipTests package
+      - name: Locate isolate library
+        id: isolate
+        shell: bash
+        run: |
+          set -euo pipefail
+          lib="$(find target -maxdepth 1 -type f \( -name 'oresvm.so' -o -name 'liboresvm.so' -o -name 'oresvm.dylib' -o -name 'liboresvm.dylib' \) | head -n1)"
+          test -n "$lib"
+          echo "path=$PWD/$lib" >> "$GITHUB_OUTPUT"
+      - run: >-
+          mvn -B -ntp
+          -Dpolyglot.engine.IsolateLibrary="${{ steps.isolate.outputs.path }}"
+          -DskipTests exec:java
+          -Dexec.args="--strict-isolate --mode=jit --platform=linux examples/together.ores"

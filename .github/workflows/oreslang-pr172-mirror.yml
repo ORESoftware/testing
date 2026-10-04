@@ -1,0 +1,25 @@
+name: oreslang-pr172-mirror
+
+on:
+  push:
+    branches:
+      - tmp/oreslang-pr172-20261004
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - name: Compile and run hardening tests
+        run: mvn -B -ntp -Dtest=PureTrapRuntimeKeywordTest test

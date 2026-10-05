@@ -1,0 +1,24 @@
+{
+  "jni": [
+    {
+      "type": "java.lang.IllegalStateException",
+      "jniAccessible": true,
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": ["java.lang.String"]
+        }
+      ]
+    },
+    {
+      "type": "dev.oreslang.runtime.NativeCarrierExecutor",
+      "jniAccessible": true,
+      "methods": [
+        {
+          "name": "nativeCarrierLoop",
+          "parameterTypes": ["int"]
+        }
+      ]
+    }
+  ]
+}

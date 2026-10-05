@@ -1947,7 +1947,9 @@ public final class TypeChecker {
             if (contextual != null) return contextual;
         }
         if (expr instanceof Ast.ListExpr list) {
-            if (expected instanceof ListType expectedList) {
+            if (expected instanceof ListType expectedList
+                    && !containsContextualInferenceGeneric(expectedList.element())
+                    && !containsUnknown(expectedList.element())) {
                 for (int i = 0; i < list.elements().size(); i++) {
                     Type actual = typeOfAgainstExpected(
                             list.elements().get(i), expectedList.element(), env, generics, self);
@@ -3869,6 +3871,40 @@ public final class TypeChecker {
             return new Record(members);
         }
         return type;
+    }
+
+    /**
+     * Contextual collection typing may safely collapse a literal to its
+     * expected type only when that expectation is already concrete. Open
+     * generics must preserve the literal's actual element type so generic
+     * call inference can unify each argument position independently.
+     *
+     * ModuleType is intentionally opaque here: generic placeholders inside a
+     * module contract describe polymorphic members, not an open type variable
+     * for the surrounding collection expression.
+     */
+    private boolean containsContextualInferenceGeneric(Type type) {
+        if (type instanceof Generic) return true;
+        if (type instanceof Borrow borrow) return containsContextualInferenceGeneric(borrow.target());
+        if (type instanceof ListType list) return containsContextualInferenceGeneric(list.element());
+        if (type instanceof Tuple tuple) {
+            return tuple.elements().stream().anyMatch(this::containsContextualInferenceGeneric);
+        }
+        if (type instanceof Union union) {
+            return union.options().stream().anyMatch(this::containsContextualInferenceGeneric);
+        }
+        if (type instanceof Named named) {
+            return named.arguments().stream().anyMatch(this::containsContextualInferenceGeneric);
+        }
+        if (type instanceof Function fn) {
+            return fn.parameters().stream().anyMatch(this::containsContextualInferenceGeneric)
+                    || containsContextualInferenceGeneric(fn.result());
+        }
+        if (type instanceof Record record) {
+            return record.members().values().stream().anyMatch(this::containsContextualInferenceGeneric);
+        }
+        if (type instanceof ModuleType) return false;
+        return false;
     }
 
     private boolean containsUnknown(Type type) {

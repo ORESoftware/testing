@@ -349,6 +349,70 @@ final class ParserTest {
     }
 
     @Test
+    void actorProtocolReplyCapabilitiesAreValidatedAgainstCallerDomain() {
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
+                define actor Source as
+                  let RwLock<int> state;
+
+                  constructor(state: RwLock<int>) {
+                    self.state = state;
+                  }
+
+                  pub view(): RwLock<int> {
+                    return self.state;
+                  }
+                end
+
+                pub actor routine shared_consumer(ActorRef<Source> source) => void {
+                  val pending = source.view();
+                  return;
+                }
+                """)));
+
+        IllegalArgumentException privateFailure = assertThrows(
+                IllegalArgumentException.class,
+                () -> TypeChecker.check(Parser.parse("""
+                        define actor Source as
+                          let RwLock<int> state;
+
+                          constructor(state: RwLock<int>) {
+                            self.state = state;
+                          }
+
+                          pub view(): RwLock<int> {
+                            return self.state;
+                          }
+                        end
+
+                        pub isoactor routine private_consumer(ActorRef<Source> source) => void {
+                          val denied = source.view();
+                          return;
+                        }
+                        """)));
+        assertTrue(
+                privateFailure.getMessage().contains("RwLock")
+                        && privateFailure.getMessage().contains("shared actors"),
+                privateFailure.getMessage());
+
+        IllegalArgumentException untrustedInterfaceFailure = assertThrows(
+                IllegalArgumentException.class,
+                () -> TypeChecker.check(Parser.parse("""
+                        define interface SourceAPI
+                          fnc view(): RwLock<int>;
+                        end
+
+                        pub untrusted actor routine sandbox(ActorRef<SourceAPI> source) => void {
+                          val denied = source.view();
+                          return;
+                        }
+                        """)));
+        assertTrue(
+                untrustedInterfaceFailure.getMessage().contains("RwLock")
+                        && untrustedInterfaceFailure.getMessage().contains("shared actors"),
+                untrustedInterfaceFailure.getMessage());
+    }
+
+    @Test
     void actorWithoutLocalOrInheritedPublicProtocolIsRejected() {
         IllegalArgumentException failure = assertThrows(
                 IllegalArgumentException.class,

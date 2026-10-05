@@ -1074,6 +1074,10 @@ public final class TypeChecker {
                                     target.ownerType(),
                                     bindings,
                                     "actor protocol method " + target.owner().name() + "." + method.name());
+                            validateActorProtocolReplyForCaller(
+                                    result,
+                                    "actor protocol reply from "
+                                            + target.owner().name() + "." + method.name());
                             return new Named("Future", List.of(result));
                         }
 
@@ -1110,6 +1114,10 @@ public final class TypeChecker {
                                     "argument " + (i + 1) + " to actor protocol "
                                             + protocol.name() + "." + member.member());
                         }
+                        validateActorProtocolReplyForCaller(
+                                fn.result(),
+                                "actor protocol reply from "
+                                        + protocol.name() + "." + member.member());
                         return new Named("Future", List.of(fn.result()));
                     }
                     if (named.name().equals("SharedMutex")
@@ -1663,6 +1671,15 @@ public final class TypeChecker {
             }
         }
         throw new IllegalArgumentException("assignment target '" + member.member() + "' is not a mutable data field");
+    }
+
+    private void validateActorProtocolReplyForCaller(Type type, String where) {
+        if (currentActorKind == Ast.ActorKind.NONE) return;
+        validateActorCallableBoundaryType(
+                type,
+                currentActorKind,
+                true,
+                where + " into " + currentActorKind + " caller");
     }
 
     private void validateActorCallableBoundaryType(

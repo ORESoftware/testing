@@ -2577,10 +2577,16 @@ public final class ActorRuntime implements AutoCloseable {
 
     private record ProtocolRequest(
             String method,
-            OresFuture<Object> reply) {
+            OresFuture<Object> reply,
+            ActorKind callerKind,
+            long callerReplyLimit) {
         private ProtocolRequest {
             Objects.requireNonNull(method, "method");
             Objects.requireNonNull(reply, "reply");
+            if (callerReplyLimit < 0) {
+                throw new IllegalArgumentException(
+                        "actor protocol caller reply limit cannot be negative");
+            }
         }
     }
 
@@ -3242,10 +3248,25 @@ public final class ActorRuntime implements AutoCloseable {
         Objects.requireNonNull(arguments, "arguments");
         validateProtocolMethodName(method);
         OresFuture<Object> reply = new OresFuture<>();
+        ActorCell<?> caller = currentActor.get();
+        ActorKind callerKind = caller == null ? null : caller.kind;
+        long callerReplyLimit = Long.MAX_VALUE;
+        if (caller != null && caller.kind.memoryIsolated()) {
+            callerReplyLimit = caller.policy.maxHeapBytes();
+            if (caller.kind == ActorKind.UNTRUSTED) {
+                callerReplyLimit = Math.min(
+                        callerReplyLimit,
+                        caller.untrustedLimits.maxMailboxReturnBytes());
+            }
+        }
         enqueueMessage(
                 ref,
                 List.copyOf(arguments),
-                new ProtocolRequest(method, reply));
+                new ProtocolRequest(
+                        method,
+                        reply,
+                        callerKind,
+                        callerReplyLimit));
         return reply;
     }
 
@@ -6702,7 +6723,7 @@ public final class ActorRuntime implements AutoCloseable {
                                                     protocol.method(),
                                                     arguments,
                                                     protocolContext);
-                                            Object preparedReply = prepareProtocolReply(result);
+                                            Object preparedReply = prepareProtocolReply(result, protocol);
                                             protocol.reply().completeFromRuntime(preparedReply);
                                         } catch (ActorTurnSuspendedSignal suspended) {
                                             throw suspended;
@@ -6759,7 +6780,9 @@ public final class ActorRuntime implements AutoCloseable {
             }
         }
 
-        private Object prepareProtocolReply(Object result) {
+        private Object prepareProtocolReply(
+                Object result,
+                ProtocolRequest protocol) {
             validateMessageGraph(result);
             requireOwnedActorRefs(result, new IdentityHashMap<>(), 0);
             requireOwnedSharedHandles(result, new IdentityHashMap<>(), 0);
@@ -6778,9 +6801,30 @@ public final class ActorRuntime implements AutoCloseable {
                             tooLarge);
                 }
             }
-            return kind.memoryIsolated()
+
+            Object outbound = kind.memoryIsolated()
                     ? isolateCopy(result)
                     : freezeForTransport(result);
+
+            if (protocol != null
+                    && protocol.callerKind() != null
+                    && protocol.callerKind().memoryIsolated()) {
+                try {
+                    estimatePrivateTransportBytes(
+                            outbound,
+                            new IdentityHashMap<>(),
+                            0,
+                            protocol.callerReplyLimit());
+                    return isolateCopy(outbound);
+                } catch (IllegalArgumentException | IllegalStateException denied) {
+                    throw new SecurityException(
+                            "actor protocol reply is not admissible in "
+                                    + protocol.callerKind()
+                                    + " caller domain",
+                            denied);
+                }
+            }
+            return outbound;
         }
 
         private ProtocolRequest suspendedProtocolRequest() {
@@ -6806,7 +6850,7 @@ public final class ActorRuntime implements AutoCloseable {
                 return;
             }
 
-            Object prepared = prepareProtocolReply(value);
+            Object prepared = prepareProtocolReply(value, protocol);
             if (!protocol.reply().completeFromRuntime(prepared)) {
                 if (protocol.reply().isCancelled()) {
                     return; // cancellation won the settlement race

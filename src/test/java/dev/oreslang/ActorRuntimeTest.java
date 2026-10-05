@@ -2,6 +2,8 @@ package dev.oreslang;
 
 import dev.oreslang.runtime.ActorRuntime;
 import dev.oreslang.runtime.IsolatePolicy;
+import dev.oreslang.runtime.OresFuture;
+import dev.oreslang.runtime.OresRwLock;
 import org.junit.jupiter.api.Test;
 
 import java.util.AbstractList;
@@ -334,6 +336,41 @@ final class ActorRuntimeTest {
 
             assertTrue(ref.isAlive(),
                     "invalid runtime-private protocol metadata must be rejected before actor admission");
+        }
+    }
+
+    @Test
+    void privateCallerCannotReceiveSharedRwLockThroughProtocolRuntimeBypass() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            OresRwLock<Integer> sharedState = new OresRwLock<>(7);
+            var target = runtime.spawnSourceSharedProtocolActor(factoryContext ->
+                    (method, arguments, turnContext) -> sharedState);
+
+            AtomicReference<OresFuture<Object>> observed = new AtomicReference<>();
+            CountDownLatch invoked = new CountDownLatch(1);
+
+            var privateCaller = runtime.<String>spawnPrivateTrusted(factoryContext ->
+                    (message, turnContext) -> {
+                        observed.set(runtime.invokeSourceProtocol(
+                                target,
+                                "view",
+                                List.of()));
+                        invoked.countDown();
+                    });
+
+            privateCaller.send("go");
+            assertTrue(invoked.await(2, TimeUnit.SECONDS));
+
+            ExecutionException failure = assertThrows(
+                    ExecutionException.class,
+                    () -> observed.get().get(2, TimeUnit.SECONDS));
+            assertInstanceOf(SecurityException.class, failure.getCause());
+            assertTrue(
+                    failure.getCause().getMessage().contains("PRIVATE caller domain"),
+                    failure.getCause().getMessage());
+
+            privateCaller.stop();
+            if (target.isAlive()) target.stop();
         }
     }
 

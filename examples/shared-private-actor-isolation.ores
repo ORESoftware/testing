@@ -1,0 +1,93 @@
+import fnc {actor_label} from "./actor-isolation-support.ores";
+
+define class CounterState as
+  pub let int value = 10;
+end
+
+// SHARED actor:
+// - owns normal mailbox-confined fields like local_count
+// - may also use explicit synchronized shared memory via SharedMutex<T>
+shared actor SharedCounter {
+  let int local_count = 0;
+  let SharedMutex<CounterState> shared_count =
+      SharedMutex.new(new CounterState());
+
+  pub fnc increment(): bool {
+    self.local_count = self.local_count + 1;
+
+    // Actor mailbox turns must never park a dispatcher carrier. Until actor
+    // continuation lowering can suspend/resume an incomplete lock_async()
+    // future, shared actors use nonblocking acquisition for explicit shared
+    // memory. Ordinary actor-owned state like local_count needs no mutex.
+    val shared_count = self.shared_count;
+    val maybe_guard = shared_count.try_lock();
+
+    if maybe_guard.is_none(); do
+      return false;
+    fi
+
+    val guard = maybe_guard.unwrap();
+    guard.value = guard.value + 1;
+    guard.release();
+    return true;
+  }
+
+  pub fnc local_value(): int {
+    return self.local_count;
+  }
+
+  pub fnc actor_kind(): String {
+    return actor_label(true);
+  }
+}
+
+// PRIVATE / isolated actor:
+// - "isoactor" explicitly means private / isolated
+// - owns its mutable state exclusively
+// - receives a private actor memory slice at runtime
+// - SHARED_MEMORY capability is stripped from this actor domain
+isoactor PrivateCounter {
+  let int value = 10;
+
+  pub fnc increment(): void {
+    self.value = self.value + 1;
+    return;
+  }
+
+  pub fnc current(): int {
+    return self.value;
+  }
+
+  pub fnc actor_kind(): String {
+    return actor_label(false);
+  }
+}
+
+/*
+ * Intentionally ILLEGAL Oreslang:
+ *
+ * A private actor cannot declare or use SharedMutex<T>, because private actor
+ * capability admission removes both SHARED_MEMORY and ACTOR_SHARE_READONLY.
+ * The check is transitive through aliases, stored class state, instance methods,
+ * ordinary helper functions, and static class helpers. Runtime capability checks
+ * also consult the current actor-local policy, so imported/dynamic helper code
+ * cannot regain the parent Truffle context's authority.
+ *
+ * process.share_readonly(...) is therefore private-actor forbidden too.
+ *
+ * isoactor BrokenPrivateCounter {
+ *   let SharedMutex<CounterState> shared_count =
+ *       SharedMutex.new(new CounterState());
+ *
+ *   pub fnc increment_shared(): void {
+ *     self.shared_count.with_lock(|counter| -> {
+ *       counter.value = counter.value + 1;
+ *       return;
+ *     });
+ *     return;
+ *   }
+ * }
+ *
+ * The compiler/runtime must reject that actor instead of silently sharing
+ * mutable memory with the shared actor domain.
+ */

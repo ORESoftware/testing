@@ -1,0 +1,115 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - name: GraalVM diagnostics
+        run: |
+          java --version
+          native-image --version
+      - name: Verify JIT/JVM profile
+        run: mvn -B -ntp -Dores.runtime.carriers=native verify
+      - name: Run showcase
+        run: mvn -B -ntp -DskipTests exec:java -Dexec.args="examples/showcase.ores"
+      - name: Compile and run shared Oreslang program
+        run: mvn -B -ntp -DskipTests exec:java -Dexec.args="examples/together.ores"
+
+  native-aot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - name: GraalVM diagnostics
+        run: |
+          java --version
+          native-image --version
+      - name: Build interpreter-only AOT image
+        run: mvn -B -ntp -Pnative-aot -DskipTests package
+      - name: Run AOT image
+        run: ./target/ores-aot --mode=aot --platform=linux examples/together.ores
+      - name: Run AOT proper tail-call stress
+        run: |
+          ./target/ores-aot --mode=aot --platform=linux examples/proper-tail-call.ores | tee /tmp/ores-aot-tail.out
+          grep -F "0|0|0" /tmp/ores-aot-tail.out
+
+  native-hybrid:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - name: GraalVM diagnostics
+        run: |
+          java --version
+          native-image --version
+      - name: Build AOT host with guest JIT
+        run: mvn -B -ntp -Pnative-hybrid -DskipTests package
+      - name: Run hybrid image
+        run: ./target/ores-hybrid --mode=hybrid --platform=linux examples/together.ores
+      - name: Run hybrid proper tail-call stress
+        run: |
+          ./target/ores-hybrid --mode=hybrid --platform=linux examples/proper-tail-call.ores | tee /tmp/ores-hybrid-tail.out
+          grep -F "0|0|0" /tmp/ores-hybrid-tail.out
+
+  polyglot-isolate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - name: GraalVM diagnostics
+        run: |
+          java --version
+          native-image --version
+      - name: Build Oreslang polyglot isolate library
+        run: mvn -B -ntp -Pnative-isolate -DskipTests package
+      - name: Locate isolate library
+        id: isolate
+        shell: bash
+        run: |
+          lib="$(find target -maxdepth 1 -type f \( -name 'oresvm.so' -o -name 'liboresvm.so' -o -name 'oresvm.dylib' -o -name 'liboresvm.dylib' \) | head -n1)"
+          test -n "$lib"
+          echo "path=$PWD/$lib" >> "$GITHUB_OUTPUT"
+      - name: Run strict program in Oreslang polyglot isolate
+        run: mvn -B -ntp -Dpolyglot.engine.IsolateLibrary="${{ steps.isolate.outputs.path }}" -DskipTests exec:java -Dexec.args="--strict-isolate --mode=jit --platform=linux examples/together.ores"

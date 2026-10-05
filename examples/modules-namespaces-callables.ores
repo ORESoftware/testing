@@ -1,0 +1,35 @@
+namespace callable_demo;
+
+type IntFn = typeof fnc(int value) => int;
+
+define module math
+
+  pub fnc factorial(int n): int {
+    if n <= 1; do
+      return 1;
+    else
+      return n * factorial(n - 1);
+    fi
+  }
+
+end
+
+define module closures
+
+  pub fnc makeAdder(int base): IntFn {
+    return |value| -> {
+      return base + value;
+    };
+  }
+
+end
+
+pub routine main(): void {
+  val IntFn addTen = closures.makeAdder(10);
+
+  stdio.stdout.write(math.factorial(5));
+  stdio.stdout.write("|");
+  stdio.stdout.write(addTen(7));
+
+  return;
+}

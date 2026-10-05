@@ -17,11 +17,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: zed-pkg-test/java-app
-          ref: 117ea39bea08aefdb88021a041274c465b841f81
+          ref: a59a8fef423b05fffcdc489aee59ef29233db02a
           persist-credentials: false
 
       - name: Verify exact carrier tree
-        run: test "$(git rev-parse HEAD)" = "117ea39bea08aefdb88021a041274c465b841f81"
+        run: test "$(git rev-parse HEAD)" = "a59a8fef423b05fffcdc489aee59ef29233db02a"
 
       - name: Set up GraalVM
         uses: graalvm/setup-graalvm@v1

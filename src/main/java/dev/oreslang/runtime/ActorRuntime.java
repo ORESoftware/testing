@@ -3240,16 +3240,33 @@ public final class ActorRuntime implements AutoCloseable {
         Objects.requireNonNull(ref, "ref");
         Objects.requireNonNull(method, "method");
         Objects.requireNonNull(arguments, "arguments");
-        if (method.isBlank() || method.length() > 256) {
-            throw new IllegalArgumentException(
-                    "actor protocol method name must contain 1..256 characters");
-        }
+        validateProtocolMethodName(method);
         OresFuture<Object> reply = new OresFuture<>();
         enqueueMessage(
                 ref,
                 List.copyOf(arguments),
                 new ProtocolRequest(method, reply));
         return reply;
+    }
+
+    private static void validateProtocolMethodName(String method) {
+        if (method.isBlank() || method.length() > 256) {
+            throw new IllegalArgumentException(
+                    "actor protocol method name must contain 1..256 characters");
+        }
+        int first = method.codePointAt(0);
+        if (first != '_' && !Character.isUnicodeIdentifierStart(first)) {
+            throw new IllegalArgumentException(
+                    "actor protocol method must be a valid identifier");
+        }
+        for (int offset = Character.charCount(first); offset < method.length();) {
+            int cp = method.codePointAt(offset);
+            if (!Character.isUnicodeIdentifierPart(cp)) {
+                throw new IllegalArgumentException(
+                        "actor protocol method must be a valid identifier");
+            }
+            offset += Character.charCount(cp);
+        }
     }
 
     /**
@@ -6598,6 +6615,7 @@ public final class ActorRuntime implements AutoCloseable {
                                 continuation.value(),
                                 continuation.failure(),
                                 context);
+                        requireSuspendedProtocolReplySettled();
                     } catch (ActorTurnSuspendedSignal suspended) {
                         suspendedAgain = true;
                     } catch (Throwable failure) {
@@ -6800,9 +6818,24 @@ public final class ActorRuntime implements AutoCloseable {
 
         private void failSuspendedProtocolReply(Throwable failure) {
             Objects.requireNonNull(failure, "failure");
+            if (currentActor.get() != this) {
+                throw new IllegalStateException(
+                        "protocol reply failure is valid only in the owning actor turn",
+                        failure);
+            }
             ProtocolRequest protocol = suspendedProtocolRequest();
             if (protocol != null && !protocol.reply().isDone()) {
                 protocol.reply().failFromRuntime(failure);
+            }
+        }
+
+        private void requireSuspendedProtocolReplySettled() {
+            ProtocolRequest protocol = suspendedProtocolRequest();
+            if (protocol != null && !protocol.reply().isDone()) {
+                throw new IllegalStateException(
+                        "typed actor protocol continuation returned without settling its reply; "
+                                + "compiler lowering must call completeProtocolReply(...) "
+                                + "or failProtocolReply(...) exactly once");
             }
         }
 

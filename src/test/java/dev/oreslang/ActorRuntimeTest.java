@@ -247,6 +247,97 @@ final class ActorRuntimeTest {
     }
 
     @Test
+    void suspendedProtocolContinuationMustSettleReplyBeforeReturning() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            CompletableFuture<Integer> gate = new CompletableFuture<>();
+            CountDownLatch suspended = new CountDownLatch(1);
+
+            var ref = runtime.spawnSourceSharedProtocolActor(factoryContext ->
+                    (method, arguments, turnContext) -> {
+                        suspended.countDown();
+                        turnContext.suspendOn(gate, (value, failure, resumeContext) -> {
+                            assertNull(failure);
+                            // Deliberately omit completeProtocolReply/failProtocolReply.
+                        });
+                        throw new AssertionError("suspendOn must unwind the current actor turn");
+                    });
+
+            var reply = runtime.invokeSourceProtocol(ref, "wait", List.of());
+            assertTrue(suspended.await(2, TimeUnit.SECONDS));
+
+            gate.complete(1);
+
+            ExecutionException failure = assertThrows(
+                    ExecutionException.class,
+                    () -> reply.get(2, TimeUnit.SECONDS));
+            assertTrue(failure.getCause().getMessage()
+                    .contains("returned without settling its reply"));
+
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (ref.isAlive() && System.nanoTime() < deadline) Thread.sleep(2);
+            assertFalse(ref.isAlive(),
+                    "compiler/runtime reply-settlement invariant violations must fail-stop");
+        }
+    }
+
+    @Test
+    void protocolReplyAuthorityCannotBeUsedOffActorTurn() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            CompletableFuture<Integer> gate = new CompletableFuture<>();
+            CountDownLatch suspended = new CountDownLatch(1);
+            AtomicReference<ActorRuntime.ActorContext<Object>> leakedContext =
+                    new AtomicReference<>();
+
+            var ref = runtime.spawnSourceSharedProtocolActor(factoryContext -> {
+                leakedContext.set(factoryContext);
+                return (method, arguments, turnContext) -> {
+                    suspended.countDown();
+                    turnContext.suspendOn(gate, (value, failure, resumeContext) -> {
+                        assertNull(failure);
+                        resumeContext.completeProtocolReply(value);
+                    });
+                    throw new AssertionError("suspendOn must unwind the current actor turn");
+                };
+            });
+
+            var reply = runtime.invokeSourceProtocol(ref, "wait", List.of());
+            assertTrue(suspended.await(2, TimeUnit.SECONDS));
+
+            IllegalStateException denied = assertThrows(
+                    IllegalStateException.class,
+                    () -> leakedContext.get().failProtocolReply(
+                            new IllegalStateException("forged failure")));
+            assertTrue(denied.getMessage().contains("owning actor turn"));
+            assertFalse(reply.isDone());
+
+            gate.complete(42);
+            assertEquals(42, reply.get(2, TimeUnit.SECONDS));
+            assertTrue(ref.isAlive());
+        }
+    }
+
+    @Test
+    void protocolMethodMetadataIsBoundedAndIdentifierShaped() {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            var ref = runtime.spawnSourceSharedProtocolActor(factoryContext ->
+                    (method, arguments, turnContext) -> 1);
+
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> runtime.invokeSourceProtocol(ref, "bad-name", List.of()));
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> runtime.invokeSourceProtocol(ref, "x".repeat(257), List.of()));
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> runtime.invokeSourceProtocol(ref, " ", List.of()));
+
+            assertTrue(ref.isAlive(),
+                    "invalid runtime-private protocol metadata must be rejected before actor admission");
+        }
+    }
+
+    @Test
     void protocolInvocationRejectsForeignRuntimeActorRefs() {
         try (ActorRuntime owner = new ActorRuntime();
              ActorRuntime foreign = new ActorRuntime()) {

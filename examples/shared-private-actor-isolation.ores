@@ -1,0 +1,64 @@
+// SHARED actor:
+// - executes in the shared-actor scheduler pool
+// - owns its mutable fields behind one serialized mailbox receiver
+// - may receive an explicit RwLock<T> capability for external reads, but it
+//   cannot create or mutate external shared state through SharedMutex<T>
+shared actor SharedCounter {
+  let int value = 10;
+
+  pub receive(delta: int): void {
+    if delta > 0; do
+      self.increment(delta);
+    fi
+    return;
+  }
+
+  private increment(delta: int): void {
+    self.value = self.value + delta;
+    return;
+  }
+
+  private current(): int {
+    return self.value;
+  }
+}
+
+// PRIVATE / isolated actor:
+// - executes in the private/isoactor scheduler pool
+// - owns its mutable state exclusively
+// - has the same one-public-receive source contract
+// - cannot receive shared external-memory capabilities
+isoactor PrivateCounter {
+  let int value = 10;
+
+  pub receive(delta: int): void {
+    if delta > 0; do
+      self.value = self.value + delta;
+    fi
+    return;
+  }
+
+  private current(): int {
+    return self.value;
+  }
+}
+
+/*
+ * Intentionally ILLEGAL Oreslang examples:
+ *
+ * shared actor BadShared {
+ *   pub receive(mutex: SharedMutex<int>): void {
+ *     return;
+ *   }
+ * }
+ *
+ * isoactor BadPrivate {
+ *   pub receive(state: RwLock<int>): void {
+ *     return;
+ *   }
+ * }
+ *
+ * The first actor tries to receive a writable external-state capability.
+ * The second tries to cross shared external memory into a private actor.
+ * Both must be rejected statically and again by runtime transport admission.
+ */

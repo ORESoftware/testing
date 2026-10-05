@@ -1,0 +1,54 @@
+// Compile-valid but capability-invalid by design.
+// This file is a negative regression fixture for PRIVATE actor isolation.
+
+type SharedCounterCell = SharedMutex<int>;
+
+fnc make_shared_cell() => void {
+  val shared = SharedMutex.new(10);
+  stdio.println(shared.is_poisoned());
+  return;
+}
+
+define class Helpers as
+  pub static fnc make_shared() => void {
+    val shared = SharedMutex.new(11);
+    stdio.println(shared.is_poisoned());
+    return;
+  }
+end
+
+isoactor InvalidPrivateCounter {
+  pub receive(int message): void { return; }
+
+  // Type-alias laundering must be rejected.
+  private fnc accept_alias(SharedCounterCell cell) => void {
+    return;
+  }
+
+  // Read-only sharing is still sharing authority and is forbidden.
+  private fnc try_readonly_share() => void {
+    val shared = process.share_readonly(arr[1, 2, 3]);
+    stdio.println(shared);
+    return;
+  }
+
+  // Direct helper indirection must not regain SHARED_MEMORY.
+  private fnc try_helper_indirection() => void {
+    make_shared_cell();
+    return;
+  }
+
+  // First-class function values must be scanned under the actor policy.
+  private fnc try_callback_indirection() => void {
+    val callback = make_shared_cell;
+    callback();
+    return;
+  }
+
+  // Static method values are another callback-laundering path.
+  private fnc try_static_callback_indirection() => void {
+    val callback = Helpers.make_shared;
+    callback();
+    return;
+  }
+}

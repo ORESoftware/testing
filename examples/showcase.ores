@@ -1,0 +1,53 @@
+define module contracts
+  define interface MathApi
+    fnc add(int a, int b) => int;
+  end
+end
+
+@AdheresTo(contracts.MathApi)
+define module math
+  pub fnc add(int a, int b) => int {
+    return a + b;
+  }
+
+  fnc impedance() => complex {
+    return 3 + 4i;
+  }
+end
+
+define module model
+  define class Base as
+    pub seven() => int { return 7; }
+  end
+
+  define class Box<T> extends Base as
+    val T value;
+
+    @Ret<self>
+    identity() {
+      return self;
+    }
+  end
+end
+
+define module app
+  pub fnc main() => void {
+    let answer = math.add(40, 2);
+    answer = answer + 1;
+    val complex z = 3 + 4i;
+    val values = arr[answer, 2];
+    val info = obj{name: "oreslang", stable: true};
+    [const first, let second] = (values[0], values[1]);
+
+    if first == 43, info.stable | false; do
+      stdio.println("oreslang-ok");
+    else
+      stdio.println("unexpected");
+    fi
+
+    stdio.println(info.name);
+    stdio.println(z);
+    stdio.println(second);
+    return;
+  }
+end

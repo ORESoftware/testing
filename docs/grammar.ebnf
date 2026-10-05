@@ -1,0 +1,340 @@
+(* Oreslang v0.6 concrete grammar. Semantic restrictions are described in LANGUAGE.md. *)
+
+source          = [ namespace_decl ] { import_decl } { top_level_item } EOF ;
+namespace_decl  = "namespace" IDENT ";" ;
+
+import_decl     = "import" import_spec "from" STRING_LITERAL ";" ;
+import_spec     = "*" "as" IDENT
+                | "entry" [ "as" ] IDENT
+                | "module" import_names
+                | "class" import_names
+                | "actor" import_names
+                | "fnc" import_names ;
+import_names    = import_name
+                | "{" import_name { "," import_name } "}"
+                | "(" import_name { "," import_name } ")"
+                | "*" "as" IDENT ;
+import_name     = IDENT [ ( "as" | ":" ) IDENT ] ;
+
+top_level_item  = entry_export_decl
+                | annotated_module_decl
+                | actor_decl
+                | actor_callable_decl
+                | callable_decl
+                | class_decl
+                | interface_decl
+                | type_decl
+                | binding_decl ;
+
+entry_export_decl = "export" "entry" IDENT ";" ;
+
+annotated_module_decl = { annotation } "define" "module" IDENT
+                        { module_member } "end" ;
+
+module_member   = actor_decl
+                | actor_callable_decl
+                | callable_decl
+                | class_decl
+                | interface_decl
+                | type_decl
+                | binding_decl ;
+
+visibility      = [ "pub" | "private" ] ;
+callable_modifier = "abstract" | "async" | "nlex" ;
+method_modifier   = "abstract" | "async" ;
+
+callable_decl   = { annotation } visibility { callable_modifier } callable_kind IDENT [ generic_params ]
+                  "(" [ param_list ] ")" return_spec block ;
+callable_kind   = "fnc" | "routine" ;
+
+actor_callable_decl
+                = { annotation } visibility [ "nlex" ] [ "shared" | "untrusted" ] "actor" "fnc" IDENT [ generic_params ]
+                  "(" [ param_list ] ")" return_spec block ;
+
+actor_decl      = visibility [ "shared" | "untrusted" ] "actor" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  [ ( "implements" | "impl" ) type_ref { "," type_ref } ]
+                  actor_body
+                | "isoactor" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  [ ( "implements" | "impl" ) type_ref { "," type_ref } ]
+                  actor_body
+                | "define" [ "shared" ] "actor" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  [ ( "implements" | "impl" ) type_ref { "," type_ref } ]
+                  actor_body
+                | "define" "isoactor" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  [ ( "implements" | "impl" ) type_ref { "," type_ref } ]
+                  actor_body
+                | "define" "untrusted" "actor" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  [ ( "implements" | "impl" ) type_ref { "," type_ref } ]
+                  actor_body ;
+actor_body      = "{" { actor_member } "}"
+                | "as" { actor_member } "end" ;
+actor_member    = field_decl
+                | actor_method_decl ;
+actor_method_decl
+                = { annotation } visibility [ "fnc" ] method_name [ generic_params ]
+                  method_head method_return_spec block ;
+(* Semantic rule: one or more public actor instance methods form the typed
+   source-level protocol and lower to one compiler/runtime-owned mailbox
+   dispatcher. Private methods are direct self helpers inside an actor turn.
+   Public protocol methods are monomorphic at method level and cannot accept
+   mut parameters. Actor classes do not declare static functions. *)
+
+class_decl      = "define" [ "abstract" ] "class" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  [ ( "implements" | "impl" ) type_ref { "," type_ref } ]
+                  "as" { class_member } "end" ;
+
+class_member    = field_decl
+                | method_decl
+                | static_function_decl ;
+
+field_decl      = visibility binding_kind type_ref IDENT [ "=" expression ] stmt_terminator ;
+
+method_decl     = { annotation } visibility { method_modifier } method_name [ generic_params ]
+                  method_head method_return_spec ( block | stmt_terminator ) ;
+method_name     = IDENT | "[" "Symbol" "." IDENT "]" ;
+method_head     = "(" [ explicit_receiver | param_list ] ")" [ "(" [ param_list ] ")" ] ;
+explicit_receiver = "self" type_ref ;
+
+static_function_decl
+                = { annotation } visibility "static" [ "async" ] "fnc" IDENT [ generic_params ]
+                  "(" [ param_list ] ")" return_spec block ;
+
+interface_decl  = visibility "interface" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  interface_body
+                | "define" "interface" IDENT [ generic_params ]
+                  [ "extends" type_ref { "," type_ref } ]
+                  interface_body ;
+
+interface_body  = "{" { interface_member } "}"
+                | { interface_member } "end" ;
+
+interface_member= "fnc" IDENT [ generic_params ] "(" [ param_list ] ")" method_return_spec member_terminator
+                | IDENT ":" type_ref member_terminator
+                | [ binding_kind ] type_ref IDENT member_terminator ;
+
+type_decl       = "type" IDENT [ generic_params ] "=" type_ref stmt_terminator ;
+
+annotation      = "@" IDENT [ "<" [ type_args ] ">" | "(" [ type_args ] ")" ] ;
+return_spec     = [ ( ":" | "->" | "=>" ) type_ref ] ;
+method_return_spec = [ ( ":" | "->" | "=>" ) type_ref ] ;
+generic_params  = "<" IDENT { "," IDENT } ">" ;
+param_list      = param { "," param } ;
+param           = type_ref [ "mut" ] IDENT
+                | IDENT ":" type_ref [ "mut" ]
+                | "@Structural" type_ref [ "mut" ] IDENT
+                | IDENT "structural" type_ref [ "mut" ] ;
+
+binding_decl    = binding_kind [ type_ref ] IDENT "=" expression stmt_terminator ;
+binding_kind    = "val" | "const" | "let" ;
+
+destructure_stmt= [ binding_kind ] sequence_pattern "=" expression stmt_terminator
+                | [ binding_kind ] object_pattern "=" expression stmt_terminator ;
+sequence_pattern= "[" sequence_destructure_item { "," sequence_destructure_item } "]" ;
+object_pattern  = "{" object_destructure_item { "," object_destructure_item } "}" ;
+sequence_destructure_item
+                = [ binding_kind ] IDENT | "_" ;
+object_destructure_item
+                = [ binding_kind ] IDENT ;
+
+block           = "{" { statement } "}" ;
+statement       = binding_decl
+                | destructure_stmt
+                | return_stmt
+                | if_stmt
+                | try_stmt
+                | defer_stmt
+                | for_stmt
+                | expression stmt_terminator ;
+
+return_stmt     = "return" [ expression ] stmt_terminator ;
+defer_stmt      = "defer" expression stmt_terminator ;
+
+if_stmt         = "if" condition [ ";" ] "do" { statement }
+                  { "elseif" condition [ ";" ] "do" { statement } }
+                  [ "else" { statement } ] "fi" ;
+condition       = condition_and { "|" condition_and } ;
+condition_and   = equality { "," equality } ;
+
+try_stmt        = "try" block "catch" "(" IDENT ")" block [ "finally" block ] ;
+
+for_stmt        = "for" "(" for_of_head ")" block
+                | "for" "(" [ for_init ] ";" [ expression ] ";" [ expression ] ")" block ;
+
+for_of_head     = [ binding_kind ] IDENT "of" expression ;
+for_init        = binding_kind [ type_ref ] IDENT "=" expression
+                | expression ;
+
+expression      = assignment ;
+assignment      = conditional [ "=" assignment ] ;
+conditional     = logic_or [ "?" assignment ":" conditional ] ;
+logic_or        = equality { "|" equality } ;
+equality        = comparison { ( "==" | "!=" ) comparison } ;
+comparison      = additive { ( "<" | "<=" | ">" | ">=" ) additive } ;
+additive        = multiplicative { ( "+" | "-" ) multiplicative } ;
+multiplicative  = unary { ( "*" | "/" | "%" ) unary } ;
+unary           = ( "!" | "-" | "+" | "await" | "spawn" ) unary
+                | "&" [ "mut" ] unary
+                | postfix ;
+postfix         = primary { call_suffix | member_suffix | index_suffix } ;
+call_suffix     = "(" [ argument_list ] ")" ;
+member_suffix   = "." IDENT ;
+index_suffix    = "[" expression "]" ;
+argument_list   = expression { "," expression } ;
+
+primary         = literal
+                | IDENT
+                | "self"
+                | "new" type_ref "(" [ argument_list ] ")"
+                | lambda
+                | tuple_literal
+                | array_literal
+                | legacy_array_literal
+                | object_literal
+                | "(" expression ")" ;
+
+lambda          = [ "async" ] [ "nlex" ] ( pipe_lambda | typed_legacy_lambda ) ;
+pipe_lambda     = "|" [ lambda_param { "," lambda_param } ] "|" "->" block ;
+lambda_param    = IDENT | type_ref IDENT ;
+typed_legacy_lambda
+                = "(" [ param_list ] ")" "->" block ;
+
+tuple_literal   = "(" expression "," expression { "," expression } ")" ;
+array_literal   = "arr" "[" [ expression { "," expression } ] "]" ;
+legacy_array_literal = "[" [ expression { "," expression } ] "]" ;
+object_literal  = "obj" "{" [ object_field { "," object_field } ] "}" ;
+object_field    = ( IDENT | STRING_LITERAL ) ":" expression ;
+
+literal         = INT_LITERAL | FLOAT_LITERAL | IMAG_LITERAL | STRING_LITERAL
+                | "true" | "false" ;
+
+type_ref        = type_atom { "|" type_atom } ;
+
+type_atom       = borrow_type
+                | tuple_type
+                | record_type
+                | alias_marker
+                | named_type
+                | function_type
+                | grouped_type
+                | STRING_LITERAL
+                | "self"
+                | "void"
+                | "null" ;
+
+borrow_type     = "&" [ "mut" ] type_atom ;
+tuple_type      = "[" [ type_ref { "," type_ref } ] "]" ;
+record_type     = "{" [ record_type_field { "," record_type_field } ] "}" ;
+record_type_field
+                = ( IDENT | STRING_LITERAL ) ":" type_ref ;
+alias_marker    = "type" named_type ;
+named_type      = qualified_name [ "<" [ type_args ] ">" ] ;
+function_type   = "typeof" "fnc" "(" [ function_type_params ] ")" ( "=>" | "->" ) type_ref
+                | "(" [ function_type_params ] ")" ( "=>" | "->" ) type_ref ;
+grouped_type    = "(" type_ref ")" ;
+function_type_params
+                = function_type_param { "," function_type_param } ;
+function_type_param
+                = type_ref [ IDENT ] ;
+
+type_args       = type_ref { "," type_ref } ;
+qualified_name  = IDENT { "." IDENT } ;
+
+(* Semicolons are recommended. stmt_terminator/member_terminator may be omitted
+   only at an unambiguous structural boundary such as immediately before
+   "}", "fi", or "end". Imports and namespace declarations keep explicit
+   semicolons in v0.4. *)
+
+stmt_terminator   = ";" | SAFE_STRUCTURAL_BOUNDARY ;
+member_terminator = ";" | INTERFACE_CLOSING_BOUNDARY ;
+
+(* Semantic restrictions:
+   - Each source file is a separately versioned compilation/code unit and is the
+     default package identity when no explicit namespace is declared.
+   - Source namespaces are flat: namespace a.b; is illegal.
+   - Modules are flat: module names are single identifiers and modules may not
+     contain modules.
+   - fnc declarations may recurse; routines may not participate in a call cycle.
+   - nlex on a fnc/routine is a capture barrier inherited by lambdas created
+     inside it; an explicit nlex lambda establishes the same barrier.
+   - nlex blocks activation-local captures only. Module members, imports,
+     top-level callables/classes, and built-ins remain statically resolvable.
+   - nlex may qualify an actor fnc as an additional capture-free guarantee;
+     actor classes and actor/class methods do not accept nlex.
+   - Ordinary await is legal only inside an async fnc/routine/lambda. async
+     callables are MAY_SUSPEND and calling one produces Future<T> for logical
+     return type T.
+   - Actor callables and actor methods are inherently MAY_SUSPEND/async because
+     mailbox turns may suspend. Writing "async actor" or an explicit async
+     actor method is rejected as a redundant modifier; actor suspension still
+     targets the actor scheduler/lease rather than an ordinary OresScheduler.
+   - fnc and routine declarations do not overload.
+   - instance methods may overload only when arity differs.
+   - class-level functions use "static fnc"; they have no self receiver and are
+     dispatched through the class namespace, never through an instance.
+   - Callable declarations canonically use ": T" or "-> T" for their
+     return type. Historical "=> T" callable returns remain parser-compatible
+     only during migration.
+   - "=>" is the canonical type-level function arrow. Historical "->" function
+     types remain parser-compatible during migration. Lambdas and executable
+     control-flow branches use "->".
+   - Unqualified "actor" declarations are SHARED-domain actors; "isoactor" is
+     the confined/private actor-memory domain; "untrusted actor" is the
+     adversarial, memory-isolated, hard-budgeted sandbox domain.
+   - "define actor X as ... end" and "define class X extends Actor as ... end"
+     normalize to the same ClassDecl actor semantics. Actor/IsoActor/
+     UntrustedActor are compiler-intrinsic bases, not ordinary library classes.
+   - Actor fields are private mailbox-owned state. One or more public instance
+     methods form the typed actor protocol; private methods are direct self
+     helpers. OresVM owns one hidden mailbox dispatcher and
+     ActorRef<Protocol>.method(...) calls enqueue typed request/reply messages,
+     producing Future<T> for a logical method result T.
+   - Compiler-intrinsic Actor/IsoActor/UntrustedActor bases define execution
+     domains only and do not accept protocol type arguments. Protocol shape
+     comes from public methods and/or implemented interfaces.
+   - ActorRef<Protocol> interfaces may contain multiple monomorphic protocol
+     methods and may be used as hot-load/abstraction boundaries.
+   - Actor constructors are runtime-only, non-public, non-static, non-generic,
+     non-suspending, and return void.
+   - Actor isolation is an ownership/effect rule rather than @Pure or nlex:
+     actor code may mutate self-owned/fresh state and explicit capabilities, but
+     may not mutate arbitrary caller/global/external mutable state.
+   - Actor inheritance must preserve actor isolation kind.
+   - In a destructure pattern, an explicit binding kind propagates to subsequent
+     unqualified names until another binding kind appears. A leading binding
+     kind (for example const [a, b]) seeds the whole pattern. "_" never binds.
+   - Sequence destructuring targets returned arrays/lists and finite tuple types;
+     object destructuring targets returned record/map-like values.
+   - Destructuring is not currently permitted in callable parameter lists.
+   - Lambdas always have braces. Non-void lambdas must use explicit return and
+     return on every path when a contextual function result type is known.
+   - named class/interface types are nominal by default.
+   - @Structural, name structural Type, or @AllowStructural(name) opt a
+     parameter into public-shape compatibility.
+   - every loop iteration contains an injected scheduler safepoint; untrusted
+     actor statement/expression execution and call/recursion boundaries are
+     metered as additional checkpoints.
+   - [Symbol.iterator]() may provide iterator behavior for for-of.
+   - standalone null values are illegal.
+   - null is a type marker only directly inside Option<null>.
+   - inline obj{} / arr[] values cannot be subclassed; extend Object/List.
+   - "structural" is contextual in parameter position, not globally reserved.
+   - self is an immutable receiver borrow and cannot be rebound.
+   - Parameters are immutable by default. Type "mut" name grants mutation of an
+     owned parameter inside the callee, e.g. Bar mut b.
+   - &T is a shared immutable borrow. &mut T is an exclusive mutable borrow.
+   - Non-Copy values move through by-value bindings, arguments, and returns.
+   - Structural parameters are read-only borrowed views and do not consume the
+     passed value.
+   - A local borrow cannot escape the lifetime of its owner.
+   - Closures use lexical scoping. Mutable/non-Copy captures transfer ownership
+     into the closure environment; borrowed values cannot be captured.
+   - Class fields declared val/const are immutable; field mutation requires let
+     plus mutable owner access.
+*)

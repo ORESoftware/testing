@@ -1,0 +1,46 @@
+name: oreslang-pr253-rest-stdlib
+
+on:
+  push:
+    branches:
+      - test/oreslang-pr253-rest-stdlib-20261005
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out exact public Oreslang carrier
+        uses: actions/checkout@v4
+        with:
+          repository: zed-pkg-test/java-app
+          ref: 117ea39bea08aefdb88021a041274c465b841f81
+          persist-credentials: false
+
+      - name: Verify exact carrier tree
+        run: test "$(git rev-parse HEAD)" = "117ea39bea08aefdb88021a041274c465b841f81"
+
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          version: '25.3'
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+
+      - name: Run targeted compiler and core stdlib tests
+        run: mvn -B -ntp -Dores.runtime.carriers=native -Dtest=ReturnedDestructuringTest,StdlibOresTestHarnessTest test
+
+      - name: Build interpreter-only AOT image
+        run: mvn -B -ntp -Pnative-aot -DskipTests package
+
+      - name: Run rest destructuring suite through std/testing under AOT
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./target/ores-aot --mode=aot --platform=linux src/test/oreslang/stdlib/destructuring_rest.ores | tee /tmp/ores-rest-aot.out
+          grep -F "ORES_TEST|SUMMARY|total=5|passed=5|failed=0|skipped=0|filtered=0" /tmp/ores-rest-aot.out

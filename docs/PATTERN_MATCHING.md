@@ -6,7 +6,7 @@ value-case dispatch.
 ## Surface syntax
 
 ```ores
-if value is Dog dog then
+if value is type Dog dog then
   dog.bark();
 fi
 
@@ -34,8 +34,11 @@ function types and interface callable signatures.
 
 ## Semantic separation
 
-- `x is T` is a nominal type predicate and flow refinement.
-- `x is T name` additionally introduces a lexical refinement alias.
+- `x is y` is reference/handle identity.
+- `x is type T` is a nominal type predicate and flow refinement.
+- `x is type T name` additionally introduces a lexical refinement alias.
+- Prefix `is T [name]` remains the compact type-pattern form inside `match`
+  arms, where it is syntactically unambiguous.
 - `x matches P` tests a complete pattern and exposes its bindings only on the
   successful control-flow edge.
 - `x as T` is a checked cast. A failed runtime cast raises `CastError`.
@@ -45,7 +48,7 @@ function types and interface callable signatures.
 - `switch x` is constant/equality dispatch and never performs destructuring.
 
 A refinement binding is not a copy. If `dog` is introduced by
-`animal is Dog dog`, both names identify the same ownership place. Moving
+`animal is type Dog dog`, both names identify the same ownership place. Moving
 through either name consumes the same move-only value.
 
 ## Exclusive match proof obligation

@@ -879,7 +879,10 @@ public final class Parser {
         if (i >= tokens.size() || tokens.get(i).type() != SELECT) return false;
         i++;
 
-        if (i < tokens.size() && tokens.get(i).type() == FIRST) {
+        if (i < tokens.size()
+                && (tokens.get(i).type() == FIRST
+                        || (tokens.get(i).type() == IDENT
+                                && tokens.get(i).lexeme().equals("first")))) {
             i++;
         } else if (i < tokens.size()
                 && tokens.get(i).type() == IDENT
@@ -965,7 +968,10 @@ public final class Parser {
     }
 
     private Ast.SelectPolicy parseSelectPolicy() {
-        if (match(FIRST)) return Ast.SelectPolicy.PRIORITY;
+        if (match(FIRST)
+                || (check(IDENT) && peek().lexeme().equals("first") && advance() != null)) {
+            return Ast.SelectPolicy.PRIORITY;
+        }
         if (check(IDENT) && peek().lexeme().equals("fair")) {
             advance();
             return Ast.SelectPolicy.FAIR;

@@ -62,7 +62,12 @@ final class ChannelSelectSyntaxTest {
         Ast.FunctionDecl nonblocking =
                 (Ast.FunctionDecl) program.modules().getFirst().declarations().get(1);
         Ast.SelectStmt nb =
-                assertInstanceOf(Ast.SelectStmt.class, nonblocking.body().getFirst());
+                assertInstanceOf(
+                        Ast.SelectStmt.class,
+                        nonblocking.body().stream()
+                                .filter(statement -> statement instanceof Ast.SelectStmt)
+                                .findFirst()
+                                .orElseThrow());
         assertEquals(Ast.WaitMode.NONBLOCKING, nb.mode());
 
         assertDoesNotThrow(() -> OwnershipChecker.check(program));

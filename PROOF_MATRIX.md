@@ -83,3 +83,7 @@ A feature moves from **contract gap** to **proven** only when:
 4. cancellation and late-completion behavior are covered where applicable;
 5. bounded-resource behavior is covered (mailbox/channel/outbox/backpressure);
 6. the proof runs in CI on a clean checkout.
+
+
+## Current CPS gate
+Pending source-level `await`, `readch`, `writech`, and `select` execute through the heap-owned `SourceTask` / `OresScheduler.Task` state machine. Actor callables use the same mailbox-backed scheduler lane. The proof suite includes end-to-end pending rendezvous channel and static-select cases.

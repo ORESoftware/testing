@@ -152,12 +152,14 @@ public final class AnnotationExpander {
 
         return new Ast.ClassDecl(
                 klass.name(),
+                klass.visibility(),
                 klass.isAbstract(),
                 klass.actorKind(),
                 klass.genericParameters(),
                 klass.parents(),
                 klass.interfaces(),
                 klass.fields(),
+                klass.constructor(),
                 methods);
     }
 

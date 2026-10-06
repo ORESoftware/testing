@@ -127,14 +127,15 @@ final class AsyncAwaitLanguageTest {
     void pendingRendezvousChannelReadAndWriteResumeThroughSourceTasks() throws Exception {
         String program = """
                 define module app
-                  pub async actor fnc producer(Channel<int> output): void {
+                  let Channel<int> output = Channel.new<int>(0);
+
+                  pub async actor fnc producer(): void {
                     writech output, 42;
                     return;
                   }
 
                   pub fnc main(): void {
-                    val output = Channel.new<int>(0);
-                    val producer_done = producer(output);
+                    val producer_done = producer();
                     val value = await readch output;
                     await producer_done;
                     stdio.println(value);

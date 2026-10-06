@@ -337,9 +337,16 @@ public final class OresScheduler implements AutoCloseable {
         Objects.requireNonNull(afterTurn, "afterTurn");
         ensureOpen();
         executor.execute(() -> {
+            boolean priorCarrier = Boolean.TRUE.equals(SCHEDULER_CARRIER.get());
+            SCHEDULER_CARRIER.set(Boolean.TRUE);
             try {
                 turnExecutor.execute(() -> runBound(turn));
             } finally {
+                if (priorCarrier) {
+                    SCHEDULER_CARRIER.set(Boolean.TRUE);
+                } else {
+                    SCHEDULER_CARRIER.remove();
+                }
                 afterTurn.run();
             }
         });

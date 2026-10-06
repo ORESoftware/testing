@@ -25,22 +25,12 @@ public final class Ast {
         public ImportDecl { names = List.copyOf(names); }
     }
 
-    public record ModuleDecl(
-            String name,
-            List<Annotation> annotations,
-            List<TypeRef> contracts,
-            List<Decl> declarations) {
+    public record ModuleDecl(String name, List<Annotation> annotations, List<Decl> declarations) {
         public ModuleDecl {
             annotations = List.copyOf(annotations);
-            contracts = List.copyOf(contracts);
             declarations = List.copyOf(declarations);
         }
-        public ModuleDecl(String name, List<Annotation> annotations, List<Decl> declarations) {
-            this(name, annotations, List.of(), declarations);
-        }
-        public ModuleDecl(String name, List<Decl> declarations) {
-            this(name, List.of(), List.of(), declarations);
-        }
+        public ModuleDecl(String name, List<Decl> declarations) { this(name, List.of(), declarations); }
     }
 
     public sealed interface Decl permits FunctionDecl, ClassDecl, InterfaceDecl, FieldDecl, TypeAliasDecl { }
@@ -205,8 +195,6 @@ public final class Ast {
         }
     }
 
-    public enum ContractKind { INTERFACE, TRAIT }
-
     public sealed interface InterfaceMember permits InterfaceFunctionDecl, InterfaceFieldDecl { }
 
     public record InterfaceFunctionDecl(
@@ -220,50 +208,21 @@ public final class Ast {
         }
     }
 
-    /**
-     * Field/data requirement in an interface or trait.
-     *
-     * bindingKind == null means "readable field of this type" with no
-     * mutability/storage-strength requirement. When present, the implementation
-     * must expose the same binding kind (const/val/let).
-     */
-    public record InterfaceFieldDecl(
-            String name,
-            TypeRef type,
-            BindingKind bindingKind) implements InterfaceMember {
-        public InterfaceFieldDecl(String name, TypeRef type) {
-            this(name, type, null);
-        }
-    }
+    public record InterfaceFieldDecl(String name, TypeRef type) implements InterfaceMember { }
 
-    /**
-     * Shared contract declaration node for nominal interfaces and structural
-     * module traits. Keeping one member model makes callable/field shape
-     * checking identical while preserving the source-level distinction.
-     */
     public record InterfaceDecl(
             String name,
             Visibility visibility,
-            ContractKind contractKind,
             List<String> genericParameters,
             List<TypeRef> parents,
             List<InterfaceMember> members) implements Decl {
         public InterfaceDecl {
-            contractKind = java.util.Objects.requireNonNull(contractKind);
             genericParameters = List.copyOf(genericParameters);
             parents = List.copyOf(parents);
             members = List.copyOf(members);
         }
-        public InterfaceDecl(
-                String name,
-                Visibility visibility,
-                List<String> genericParameters,
-                List<TypeRef> parents,
-                List<InterfaceMember> members) {
-            this(name, visibility, ContractKind.INTERFACE, genericParameters, parents, members);
-        }
         public InterfaceDecl(String name, List<String> genericParameters, List<InterfaceMember> members) {
-            this(name, Visibility.PRIVATE, ContractKind.INTERFACE, genericParameters, List.of(), members);
+            this(name, Visibility.PRIVATE, genericParameters, List.of(), members);
         }
     }
 

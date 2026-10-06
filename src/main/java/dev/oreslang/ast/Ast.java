@@ -37,7 +37,7 @@ public final class Ast {
 
     public enum Visibility { PRIVATE, PUBLIC }
     public enum CallableKind { FNC, ROUTINE }
-    public enum ActorKind { NONE, PRIVATE, SHARED }
+    public enum ActorKind { NONE, PRIVATE, SHARED, UNTRUSTED }
 
     public record Annotation(String name, List<TypeRef> arguments) {
         public Annotation { arguments = List.copyOf(arguments); }
@@ -479,7 +479,9 @@ public final class Ast {
             ChannelOperation operation,
             WaitMode mode,
             Expr channel,
-            Expr value) implements Expr {
+            Expr value,
+            boolean callback,
+            List<Stmt> callbackBody) implements Expr {
         public ChannelOpExpr {
             if (operation == ChannelOperation.DEFAULT) {
                 throw new IllegalArgumentException("default is not a standalone channel operation");
@@ -491,6 +493,32 @@ public final class Ast {
             if (operation == ChannelOperation.WRITE && value == null) {
                 throw new IllegalArgumentException("writech requires a value");
             }
+            callbackBody = List.copyOf(callbackBody == null ? List.of() : callbackBody);
+            if (callback && (operation != ChannelOperation.WRITE || mode != WaitMode.NONBLOCKING)) {
+                throw new IllegalArgumentException(
+                        "channel callbacks are only valid for nonblocking writech");
+            }
+            if (!callback && !callbackBody.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "non-callback channel operations cannot carry a callback body");
+            }
+        }
+
+        public ChannelOpExpr(
+                ChannelOperation operation,
+                WaitMode mode,
+                Expr channel,
+                Expr value) {
+            this(operation, mode, channel, value, false, List.of());
+        }
+
+        public ChannelOpExpr(
+                ChannelOperation operation,
+                WaitMode mode,
+                Expr channel,
+                Expr value,
+                List<Stmt> callbackBody) {
+            this(operation, mode, channel, value, true, callbackBody);
         }
     }
 

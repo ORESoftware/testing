@@ -58,17 +58,13 @@ public final class Parser {
                     rootDeclarations.add(parseClass(modifiers.isAbstract || afterDefineAbstract));
                     continue;
                 }
-                if (match(INTERFACE, TRAIT)) {
-                    Token contractToken = previous();
-                    if (modifiers.generator) throw error(contractToken, "'generator' applies only to fnc or routine declarations");
-                    if (modifiers.nonLexical) throw error(contractToken, "'nlex' applies only to fnc, routine, or lambda");
-                    Ast.ContractKind kind = contractToken.type() == TRAIT
-                            ? Ast.ContractKind.TRAIT
-                            : Ast.ContractKind.INTERFACE;
-                    rootDeclarations.add(parseInterface(modifiers.visibility, kind));
+                if (match(INTERFACE)) {
+                    if (modifiers.generator) throw error(previous(), "'generator' applies only to fnc or routine declarations");
+                    if (modifiers.nonLexical) throw error(previous(), "'nlex' applies only to fnc, routine, or lambda");
+                    rootDeclarations.add(parseInterface(modifiers.visibility));
                     continue;
                 }
-                throw error(previous(), "expected module, class, interface, or trait after 'define'");
+                throw error(previous(), "expected module, class, or interface after 'define'");
             }
 
             Ast.Decl declaration = parseDeclarationAfterModifiers(annotations, modifiers);
@@ -160,21 +156,10 @@ public final class Parser {
     private Ast.ModuleDecl parseModule(List<Ast.Annotation> annotations) {
         String name = consume(IDENT, "expected flat module name").lexeme();
         if (check(DOT)) throw error(peek(), "modules cannot be nested or dotted");
-
-        List<Ast.TypeRef> contracts = List.of();
-        if (match(WITH)) {
-            contracts = parseTypeRefList();
-            consume(AS, "expected 'as' after module contract list");
-        } else {
-            // Canonical module syntax includes 'as'. Keep the historical
-            // no-'as' spelling accepted while existing source migrates.
-            match(AS);
-        }
-
         List<Ast.Decl> declarations = new ArrayList<>();
         while (!check(END) && !check(EOF)) declarations.add(parseModuleMember());
         consume(END, "expected 'end' to close module " + name);
-        return new Ast.ModuleDecl(name, annotations, contracts, declarations);
+        return new Ast.ModuleDecl(name, annotations, declarations);
     }
 
     private Ast.Decl parseModuleMember() {
@@ -191,16 +176,12 @@ public final class Parser {
                 if (modifiers.nonLexical) throw error(previous(), "'nlex' applies only to fnc, routine, or lambda");
                 return parseClass(modifiers.isAbstract || afterDefineAbstract);
             }
-            if (match(INTERFACE, TRAIT)) {
-                Token contractToken = previous();
-                if (modifiers.generator) throw error(contractToken, "'generator' applies only to fnc or routine declarations");
-                if (modifiers.nonLexical) throw error(contractToken, "'nlex' applies only to fnc, routine, or lambda");
-                Ast.ContractKind kind = contractToken.type() == TRAIT
-                        ? Ast.ContractKind.TRAIT
-                        : Ast.ContractKind.INTERFACE;
-                return parseInterface(modifiers.visibility, kind);
+            if (match(INTERFACE)) {
+                if (modifiers.generator) throw error(previous(), "'generator' applies only to fnc or routine declarations");
+                if (modifiers.nonLexical) throw error(previous(), "'nlex' applies only to fnc, routine, or lambda");
+                return parseInterface(modifiers.visibility);
             }
-            throw error(previous(), "expected class, interface, or trait after 'define'");
+            throw error(previous(), "expected class or interface after 'define'");
         }
 
         Ast.Decl declaration = parseDeclarationAfterModifiers(annotations, modifiers);
@@ -362,17 +343,10 @@ public final class Parser {
         return new Ast.ClassDecl(name, false, actorKind, generics, parents, interfaces, fields, methods);
     }
 
-    private Ast.InterfaceDecl parseInterface(
-            Ast.Visibility visibility,
-            Ast.ContractKind contractKind) {
-        String label = contractKind == Ast.ContractKind.TRAIT ? "trait" : "interface";
-        String name = consume(IDENT, "expected " + label + " name").lexeme();
+    private Ast.InterfaceDecl parseInterface(Ast.Visibility visibility) {
+        String name = consume(IDENT, "expected interface name").lexeme();
         List<String> generics = parseGenericParameters();
         List<Ast.TypeRef> parents = match(EXTENDS) ? parseTypeRefList() : List.of();
-
-        // Canonical declaration syntax uses 'as ... end'. Preserve the older
-        // brace/no-'as' interface spellings for compatibility.
-        match(AS);
         boolean braceStyle = match(LBRACE);
         Token.Type terminator = braceStyle ? RBRACE : END;
 
@@ -382,48 +356,38 @@ public final class Parser {
             parseModifiers();
 
             if (isLegacyFnSpelling()) {
-                throw error(peek(), label + " functions are declared with 'fnc', not 'fn'");
+                throw error(peek(), "interface functions are declared with 'fnc', not 'fn'");
             }
             if (match(FNC)) {
-                String memberName = consumeCallableName("expected " + label + " function name");
+                String memberName = consumeCallableName("expected interface function name");
                 List<String> memberGenerics = parseGenericParameters();
-                consume(LPAREN, "expected '(' after " + label + " function name");
+                consume(LPAREN, "expected '(' after interface function name");
                 List<Ast.Param> params = parseParametersUntil(RPAREN);
-                consume(RPAREN, "expected ')' after " + label + " parameters");
-                Ast.TypeRef returns = match(COLON, ARROW, FAT_ARROW)
-                        ? parseTypeRef()
-                        : Ast.TypeRef.simple("void");
-                consumeMemberTerminator(terminator, label + " function signature should end with ';'");
+                consume(RPAREN, "expected ')' after interface parameters");
+                Ast.TypeRef returns = match(FAT_ARROW) ? parseTypeRef() : Ast.TypeRef.simple("void");
+                consumeMemberTerminator(terminator, "interface function signature should end with ';'");
                 members.add(new Ast.InterfaceFunctionDecl(memberName, memberGenerics, params, returns));
                 continue;
             }
 
-            Ast.BindingKind fieldBindingKind =
-                    isBindingKind(peek().type()) ? parseBindingKind() : null;
-
             if (check(IDENT) && checkNext(COLON)) {
                 String fieldName = advance().lexeme();
-                consume(COLON, "expected ':' after " + label + " field name");
+                consume(COLON, "expected ':' after interface field name");
                 Ast.TypeRef type = parseTypeRef();
-                consumeMemberTerminator(terminator, label + " field signature should end with ';'");
-                members.add(new Ast.InterfaceFieldDecl(fieldName, type, fieldBindingKind));
+                consumeMemberTerminator(terminator, "interface field signature should end with ';'");
+                members.add(new Ast.InterfaceFieldDecl(fieldName, type));
                 continue;
             }
 
+            if (isBindingKind(peek().type())) advance();
             Ast.TypeRef type = parseTypeRef();
-            String fieldName = consume(IDENT, "expected " + label + " field name").lexeme();
-            consumeMemberTerminator(terminator, label + " field signature should end with ';'");
-            members.add(new Ast.InterfaceFieldDecl(fieldName, type, fieldBindingKind));
+            String fieldName = consume(IDENT, "expected interface field name").lexeme();
+            consumeMemberTerminator(terminator, "interface field signature should end with ';'");
+            members.add(new Ast.InterfaceFieldDecl(fieldName, type));
         }
 
-        consume(terminator, braceStyle
-                ? "expected '}' to close " + label + " " + name
-                : "expected 'end' to close " + label + " " + name);
-        return new Ast.InterfaceDecl(name, visibility, contractKind, generics, parents, members);
-    }
-
-    private Ast.InterfaceDecl parseInterface(Ast.Visibility visibility) {
-        return parseInterface(visibility, Ast.ContractKind.INTERFACE);
+        consume(terminator, braceStyle ? "expected '}' to close interface " + name : "expected 'end' to close interface " + name);
+        return new Ast.InterfaceDecl(name, visibility, generics, parents, members);
     }
 
     private List<Ast.TypeRef> parseTypeRefList() {
@@ -1497,8 +1461,13 @@ public final class Parser {
 
     private Ast.Expr parseEquality() {
         Ast.Expr expr = parseComparison();
-        while (match(EQUAL_EQUAL, BANG_EQUAL)) {
-            String op = previous().lexeme();
+        while (true) {
+            String op;
+            if (match(EQ, EQUAL_EQUAL)) op = "eq";
+            else if (match(NEQ, BANG_EQUAL)) op = "neq";
+            else if (matchAdjacentBangEqKeyword()) op = "neq";
+            else if (!suppressRefinementOperators && match(IS)) op = "is";
+            else break;
             expr = new Ast.BinaryExpr(op, expr, parseComparison());
         }
         return expr;
@@ -1512,7 +1481,9 @@ public final class Parser {
                 expr = new Ast.BinaryExpr(op, expr, parseShift());
                 continue;
             }
-            if (!suppressRefinementOperators && match(IS)) {
+            if (!suppressRefinementOperators && check(IS) && checkNext(TYPE)) {
+                advance();
+                consume(TYPE, "expected 'type' after 'is' in a nominal type test");
                 Ast.TypeRef target = parseTypeRef();
                 String binding = check(IDENT) && !peek().lexeme().equals("_") ? advance().lexeme() : null;
                 expr = new Ast.TypeTestExpr(expr, target, binding);
@@ -1693,7 +1664,7 @@ public final class Parser {
             case IDENT,
                     DEFINE, CLASS, MODULE, NAMESPACE, IMPORT, FROM, AS, EXTENDS, IMPLEMENTS,
                     TRY, CATCH, FINALLY, END, FI, IF, DO, ELSE, THEN,
-                    NEW, STOP, DONE, AWAIT, ASYNC, NLEX, ACTOR, ISOACTOR, SHARED, DEF, FNC, ROUTINE, FOR, OF, LOOP, BLOCK, BREAK, CONTINUE, YIELD, SUPER, ELSEIF, SWITCH, MATCH, MATCHES, IS, WHEN, CASE, DEFAULT, FIRST, TYPE, TYPES, TYPEOF,
+                    NEW, STOP, DONE, AWAIT, ASYNC, NLEX, ACTOR, ISOACTOR, SHARED, DEF, FNC, ROUTINE, FOR, OF, LOOP, BLOCK, BREAK, CONTINUE, YIELD, SUPER, ELSEIF, SWITCH, MATCH, MATCHES, EQ, NEQ, IS, WHEN, CASE, DEFAULT, FIRST, TYPE, TYPES, TYPEOF,
                     INTERFACE, TRAIT, STRUCT, IMPL, ABSTRACT, VOID, STATIC, PUB, PRIVATE, STRUCTURAL, RETURN, DEFER,
                     VAL, CONST, LET, MUT, SELF, TRUE, FALSE, NULL, OBJ, ARR -> true;
             default -> false;
@@ -1898,6 +1869,16 @@ public final class Parser {
             if (check(type)) { advance(); return true; }
         }
         return false;
+    }
+
+    private boolean matchAdjacentBangEqKeyword() {
+        if (current + 1 >= tokens.size()) return false;
+        Token bang = tokens.get(current);
+        Token eq = tokens.get(current + 1);
+        if (bang.type() != BANG || eq.type() != EQ || !adjacent(bang, eq)) return false;
+        advance();
+        advance();
+        return true;
     }
 
     private Token consume(Token.Type type, String message) {

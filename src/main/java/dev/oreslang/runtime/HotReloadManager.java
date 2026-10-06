@@ -26,26 +26,57 @@ import java.util.concurrent.atomic.AtomicReference;
  * No JNI/FFI or OS dynamic-library loading is required.
  */
 public final class HotReloadManager implements AutoCloseable {
-    private final IsolatePolicy policy;
+    private static final int MAX_ADVERSARIAL_SOURCE_CHARS = 1_048_576;
+    private static final int MAX_ADVERSARIAL_CODE_UNIT_ID_CHARS = 512;
+    private static final int MAX_ADVERSARIAL_LIVE_GENERATIONS = 8;
+
+    private final IsolatePolicy supervisorPolicy;
+    private final IsolatePolicy guestPolicy;
     private final ExecutionProfile executionProfile;
     private final AtomicLong sequence = new AtomicLong();
     private final AtomicReference<Generation> active = new AtomicReference<>();
     private final Map<String, Generation> activeByCodeUnit = new LinkedHashMap<>();
     private final Map<Long, Generation> generations = new LinkedHashMap<>();
 
-    public HotReloadManager(IsolatePolicy policy, ExecutionProfile executionProfile) {
-        this.policy = policy;
-        this.executionProfile = executionProfile;
-        if (!policy.allows(IsolatePolicy.Capability.HOT_CODE_LOAD)) {
-            throw new SecurityException("HOT_CODE_LOAD capability is required");
-        }
+    public HotReloadManager(
+            IsolatePolicy supervisorPolicy,
+            ExecutionProfile executionProfile) {
+        this(supervisorPolicy, supervisorPolicy, executionProfile);
     }
+
+    public HotReloadManager(
+            IsolatePolicy supervisorPolicy,
+            IsolatePolicy guestPolicy,
+            ExecutionProfile executionProfile) {
+        this.supervisorPolicy =
+                java.util.Objects.requireNonNull(supervisorPolicy);
+        this.guestPolicy =
+                java.util.Objects.requireNonNull(guestPolicy);
+        this.executionProfile =
+                java.util.Objects.requireNonNull(executionProfile);
+        this.supervisorPolicy.require(
+                IsolatePolicy.Capability.HOT_CODE_LOAD,
+                "HotReloadManager");
+    }
+
+    public static HotReloadManager forUntrustedActors(
+            IsolatePolicy supervisorPolicy,
+            ExecutionProfile executionProfile) {
+        return new HotReloadManager(
+                supervisorPolicy,
+                IsolatePolicy.untrustedActor(),
+                executionProfile);
+    }
+
+    public IsolatePolicy supervisorPolicy() { return supervisorPolicy; }
+    public IsolatePolicy guestPolicy() { return guestPolicy; }
 
     /**
      * Validates and stages a new generation without executing its entrypoint.
      */
     public synchronized Generation load(String name, String sourceText) {
-        OresCompiler.validateForIsolate(sourceText, policy);
+        validateAdmissionInputs(name, sourceText);
+        OresCompiler.validateForIsolate(sourceText, guestPolicy);
         return stage(name, digest(sourceText), sourceText);
     }
 
@@ -55,13 +86,43 @@ public final class HotReloadManager implements AutoCloseable {
      * isolate because authority belongs to the runtime policy, not the cache.
      */
     public synchronized Generation load(IncrementalCompiler.CompiledUnit unit) {
-        CapabilityChecker.check(unit.program(), policy);
+        java.util.Objects.requireNonNull(unit, "unit");
+        validateAdmissionInputs(unit.unitId(), unit.sourceText());
+        CapabilityChecker.check(unit.program(), guestPolicy);
         return stage(unit.unitId(), unit.sourceDigest(), unit.sourceText());
     }
 
+    private void validateAdmissionInputs(
+            String codeUnitId,
+            String sourceText) {
+        java.util.Objects.requireNonNull(codeUnitId, "codeUnitId");
+        java.util.Objects.requireNonNull(sourceText, "sourceText");
+        if (codeUnitId.isBlank()) {
+            throw new IllegalArgumentException("codeUnitId cannot be blank");
+        }
+        if (!guestPolicy.adversarial()) return;
+        if (codeUnitId.length() > MAX_ADVERSARIAL_CODE_UNIT_ID_CHARS) {
+            throw new IllegalArgumentException(
+                    "adversarial hot-load codeUnitId exceeds maximum length "
+                            + MAX_ADVERSARIAL_CODE_UNIT_ID_CHARS);
+        }
+        if (sourceText.length() > MAX_ADVERSARIAL_SOURCE_CHARS) {
+            throw new IllegalArgumentException(
+                    "adversarial hot-load source exceeds maximum character count "
+                            + MAX_ADVERSARIAL_SOURCE_CHARS);
+        }
+    }
+
     private Generation stage(String codeUnitId, String sourceDigest, String sourceText) {
+        if (guestPolicy.adversarial()
+                && generations.size() >= MAX_ADVERSARIAL_LIVE_GENERATIONS) {
+            throw new IllegalStateException(
+                    "adversarial hot-load live generation limit exceeded: "
+                            + MAX_ADVERSARIAL_LIVE_GENERATIONS);
+        }
         long id = sequence.incrementAndGet();
-        Context context = policy.restrictedContextBuilder(executionProfile).build();
+        Context context =
+                guestPolicy.restrictedContextBuilder(executionProfile).build();
         try {
             Source source = Source.newBuilder(OresLanguage.ID, sourceText, codeUnitId)
                     .mimeType(OresLanguage.MIME_TYPE)

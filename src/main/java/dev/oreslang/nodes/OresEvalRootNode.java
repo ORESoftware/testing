@@ -1007,7 +1007,8 @@ public final class OresEvalRootNode extends RootNode {
                     env,
                     defers,
                     0,
-                    flow -> finishBlock(task, env, defers, flow, continuation));
+                    (ignored, flow) ->
+                            finishBlock(task, env, defers, flow, continuation));
         }
 
         private void runStatements(
@@ -1082,7 +1083,7 @@ public final class OresEvalRootNode extends RootNode {
                     stmt,
                     env,
                     defers,
-                    flow -> {
+                    (ignored, flow) -> {
                         if (flow.kind() == SourceFlowKind.NORMAL) {
                             runStatements(
                                     task,

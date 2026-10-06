@@ -16,6 +16,7 @@ import dev.oreslang.runtime.ActorRuntime;
 import dev.oreslang.runtime.AsyncRuntime;
 import dev.oreslang.runtime.ChannelRuntime;
 import dev.oreslang.runtime.OresFuture;
+import dev.oreslang.runtime.Awaitable;
 import dev.oreslang.runtime.OresScheduler;
 
 import java.nio.file.Path;
@@ -440,7 +441,6 @@ public final class OresEvalRootNode extends RootNode {
         }
 
 
-        @FunctionalInterface
         @FunctionalInterface
         private interface SourceValueCont {
             void accept(SourceTask task, Object value, Throwable failure);
@@ -2667,10 +2667,7 @@ public final class OresEvalRootNode extends RootNode {
                 Env env,
                 ArrayList<Object> values,
                 int index,
-                java.util.function.BiConsumer<
-                        SourceTask,
-                        List<Object>,
-                        Throwable> continuation) {
+                SourceArgsCont continuation) {
             if (index >= expressions.size()) {
                 continuation.accept(task, List.copyOf(values), null);
                 return;
@@ -2732,7 +2729,7 @@ public final class OresEvalRootNode extends RootNode {
                                 "duplicate obj field " + entry.getKey());
                     }
                 }
-                continuation.accept(task, result);
+                continuation.accept(task, result, null);
                 return;
             }
 

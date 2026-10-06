@@ -2741,7 +2741,7 @@ public final class OresEvalRootNode extends RootNode {
                             continuation.accept(t, null, failure);
                             return;
                         }
-                        String actualKey = field.name();
+                        final String actualKey;
                         if (field.isDynamic()) {
                             if (!(key instanceof String stringKey)) {
                                 continuation.accept(
@@ -2752,6 +2752,8 @@ public final class OresEvalRootNode extends RootNode {
                                 return;
                             }
                             actualKey = stringKey;
+                        } else {
+                            actualKey = field.name();
                         }
                         evalSuspendableExpr(
                                 t,

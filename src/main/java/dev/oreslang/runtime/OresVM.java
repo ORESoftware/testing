@@ -114,7 +114,7 @@ public final class OresVM implements AutoCloseable {
         return controlExecutor.getPoolSize();
     }
 
-    OresScheduler rootScheduler() {
+    public OresScheduler rootScheduler() {
         if (!started()) {
             throw new IllegalStateException(
                     "Oreslang VM root scheduler was requested before startup");

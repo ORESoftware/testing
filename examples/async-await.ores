@@ -1,0 +1,15 @@
+// C#-inspired async/await: async returns Future<T> immediately.
+// Await consumes the future; it does not reserve a platform thread.
+
+define module AsyncDemo
+  pub async fnc calculate(int n): int {
+    return n * n;
+  }
+
+  pub async fnc main(): void {
+    val pending = calculate(12);
+    val result = await pending;
+    stdio.println(result);
+    return;
+  }
+end

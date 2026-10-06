@@ -1,9 +1,0 @@
-[package]
-name = "common-desktop-rust-distribution-proof"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.82"
-publish = false
-
-[dependencies]
-serde_json = "1"

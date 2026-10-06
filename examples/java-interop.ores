@@ -1,0 +1,11 @@
+import class ArrayList as JArrayList from "java:java.util.ArrayList";
+
+pub routine main(): void {
+  val values = new JArrayList();
+  values.add(19);
+  values.add(23);
+
+  stdio.println("Java ArrayList size from Oreslang:");
+  stdio.println(values.size());
+  return;
+}

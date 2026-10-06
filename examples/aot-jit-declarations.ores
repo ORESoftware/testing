@@ -1,0 +1,76 @@
+pub fnc call0(Fnc<String> callback): String {
+  return callback();
+}
+
+pub fnc call1(Fnc<int, String> callback): String {
+  return callback(7);
+}
+
+pub interface Picker {
+  fnc pick() => String;
+  fnc pick(int x) => String;
+  fnc pick(int x, int y) => String;
+}
+
+define class Base implements Picker as
+  pub pick(): String {
+    return "base0";
+  }
+
+  pub pick(int x): String {
+    return "base1";
+  }
+
+  pub pick(int x, int y): String {
+    return "base2";
+  }
+
+  pub static fnc choose(): String {
+    return "static0";
+  }
+
+  pub static fnc choose(int x): String {
+    return "static1";
+  }
+
+  pub callback0(): String {
+    return call0(self.pick);
+  }
+
+  pub callback1(): String {
+    return call1(self.pick);
+  }
+end
+
+define class Child extends Base as
+  pub pick(int x): String {
+    return "child1";
+  }
+end
+
+pub routine main(): void {
+  val base = new Base();
+  val child = new Child();
+  val Fnc<String> child0 = child.pick;
+
+  stdio.println(
+    base.pick()
+    + "|" + base.pick(1)
+    + "|" + base.pick(1, 2)
+    + "|" + Base.choose()
+    + "|" + Base.choose(1)
+    + "|" + child.pick()
+    + "|" + child.pick(1)
+    + "|" + child.pick(1, 2)
+    + "|" + Child.choose()
+    + "|" + Child.choose(1)
+    + "|" + call0(base.pick)
+    + "|" + call1(base.pick)
+    + "|" + child.callback0()
+    + "|" + child.callback1()
+    + "|" + child0()
+    + "|" + call0(Base.choose)
+    + "|" + call1(Base.choose)
+  );
+  return;
+}

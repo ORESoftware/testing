@@ -1,0 +1,30 @@
+name: Project manifest CI
+
+on:
+  push:
+    branches:
+      - feat/project-manifest-oreslang-path-20261003
+  pull_request:
+    paths:
+      - '.oreslangc.cfg.toml'
+      - 'contracts/oreslangc-config.*'
+      - 'src/**'
+      - 'pom.xml'
+      - '.github/workflows/project-manifest-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: maven
+      - name: Verify
+        run: mvn -B -ntp verify

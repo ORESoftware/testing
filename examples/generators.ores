@@ -1,0 +1,27 @@
+async fnc later(int value): int {
+  return value;
+}
+
+generator fnc ids(): int {
+  yield 10;
+  yield 20;
+  yield 30;
+  return;
+}
+
+async generator fnc async_ids(): int {
+  yield await later(40);
+  yield await later(50);
+  return;
+}
+
+pub async fnc main(): void {
+  for id of ids() do
+    stdio.println(id);
+  done
+
+  for await id of async_ids() do
+    stdio.println(id);
+  done
+  return;
+}

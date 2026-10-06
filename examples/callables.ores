@@ -1,0 +1,31 @@
+namespace demo;
+
+define module math
+  pub fnc factorial(int n): int {
+    return n == 0 ? 1 : n * factorial(n - 1);
+  }
+
+  pub fnc offset(int x): int {
+    return x + 10;
+  }
+end
+
+pub routine main(): void {
+  val int base = 7;
+
+  val Fnc<int, int> lexical = |int x| -> {
+    return x + base;
+  };
+
+  val Fnc<int, int> isolated = nlex |int x| -> {
+    val int base = 1;
+    return math.offset(x) + base;
+  };
+
+  stdio.stdout.write(math.factorial(5));
+  stdio.stdout.write(":");
+  stdio.stdout.write(lexical(2));
+  stdio.stdout.write(":");
+  stdio.stdout.write(isolated(2));
+  return;
+}

@@ -122,7 +122,7 @@ public final class OresVM implements AutoCloseable {
         return rootScheduler;
     }
 
-    boolean isRootSchedulerCurrent() {
+    public boolean isRootSchedulerCurrent() {
         return OresScheduler.current() == rootScheduler;
     }
 

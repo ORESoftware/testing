@@ -7,13 +7,13 @@ Oreslang is a statically typed guest language for GraalVM/Truffle. Named types a
 A source file may contain multiple named modules. A module is a namespace: exported members are accessed through the module name, such as `math.add(1, 2)`.
 
 ```ores
-define module math
+define module math as
   pub fnc add(int a, int b): int {
     return a + b;
   }
 end
 
-define module app
+define module app as
   pub fnc main(): void {
     val answer = math.add(40, 2);
     stdio.println(answer);
@@ -44,9 +44,11 @@ Comma-separated and parenthesized named selections are equivalent, so
 `import types (X, Y, Z) from "../foo";` produce the same import selection.
 The existing brace form remains accepted for compatibility. `types` is the
 union selector for type-like declarations: `trait`, `struct`, `interface`,
-and `type`. On the current v0.6 AST, interface and type-alias declarations are
-available; trait/struct selectors are reserved and fail closed at link
-validation until those declaration kinds land on the current compiler branch.
+and `type`. Interfaces, traits, and type aliases are first-class declarations
+in the current compiler. `import interface` and `import trait` are distinct
+selectors and fail closed if the exported declaration has the wrong contract
+kind. `struct` remains reserved until the standalone struct declaration kind
+lands.
 
 Wildcard imports always require a namespace alias. A single named import may use
 `as` to choose its local binding; the original source name still controls export
@@ -103,26 +105,69 @@ specific sequencing relationship *between* two init hooks in the same cycle,
 that relationship should be made explicit in application code rather than
 inferred from the import edges.
 
-## Module interfaces / OCaml-style module signatures
+## Module traits, contracts, and `Module<T>` handles
 
-Interfaces can describe the structural public shape required of a module. A module opts into checking with `@AdheresTo(...)`:
+A trait can describe the structural public shape required of a module. The
+canonical declaration and conformance syntax is `define trait ... as` plus
+`define module ... with Trait as`:
 
 ```ores
-define module contracts
-  define interface MathApi
-    fnc add(int a, int b) => int;
-    String name;
-  end
+pub define trait MathModule as
+  fnc add(int a, int b): int;
+  const name: String;
 end
 
-@AdheresTo(contracts.MathApi)
-define module math
+define module math with MathModule as
   pub fnc add(int a, int b): int { return a + b; }
-  pub val String name = "math";
+  pub const String name = "math";
 end
 ```
 
-Only exported (`pub`) module members satisfy an adherence contract. `@AdheresTo(A, B)` may name more than one interface.
+Only exported (`pub`) module members satisfy a module contract. Contract
+callables use the ordinary executable return spellings `: T` or `-> T`;
+the older fat-arrow spelling remains accepted for compatibility but is not
+canonical.
+
+Contract fields participate in conformance just like functions. An unqualified
+field such as `name: String;` requires a readable public field of that type
+regardless of whether the implementation stores it as `const`, `val`, or
+`let`. A qualified field is exact: `const name: String;`, `val name:
+String;`, and `let name: String;` require the corresponding implementation
+binding kind. This lets contracts express immutable versus mutable module data
+without making compiler metadata visible as ordinary members.
+
+Modules are first-class values through `Module<Contract>`. The wrapper is
+nominal—ordinary records/classes cannot masquerade as modules—while the public
+module surface is checked structurally against the requested contract:
+
+```ores
+fnc inspect(Module<MathModule> module): int {
+  return module.add(40, 2);
+}
+
+pub routine main(): void {
+  val List<Module<MathModule>> modules = [math];
+  for module of modules do
+    stdio.println(module.name);
+    stdio.println(inspect(module));
+  done
+  return;
+}
+```
+
+The same trait may be imported and applied by modules in different files.
+Named `import module` bindings retain their precise public module shape during
+linked compilation instead of degrading to `Unknown`, so passing an imported
+module as `Module<T>` is checked at compile time.
+
+`@AdheresTo(A, B)` remains a compatibility spelling for declared module
+conformance; new code should prefer `with A, B as`. A module value may also be
+validated structurally when it is used where a `Module<T>` is required even
+if it did not repeat the contract in its declaration.
+
+`Module<T>` does not grant ambient filesystem loading. Cross-file module
+resolution remains host/linker controlled; a future dynamic loader must return
+a validated `Module<T>` only from an explicitly authorized source.
 
 ## Functions and returns
 

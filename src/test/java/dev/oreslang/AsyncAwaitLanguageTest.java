@@ -136,7 +136,7 @@ final class AsyncAwaitLanguageTest {
 
                   pub fnc main(): void {
                     val producer_done = producer();
-                    val value = await readch output;
+                    val value = readch output;
                     await producer_done;
                     stdio.println(value);
                     return;
@@ -178,6 +178,7 @@ final class AsyncAwaitLanguageTest {
                       case readch input: let value
                         return value;
                     }
+                    return 0;
                   }
 
                   pub fnc main(): void {

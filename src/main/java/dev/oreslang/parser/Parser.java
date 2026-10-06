@@ -1808,7 +1808,7 @@ public final class Parser {
             case IDENT,
                     DEFINE, CLASS, MODULE, NAMESPACE, IMPORT, FROM, AS, EXTENDS, IMPLEMENTS,
                     TRY, CATCH, FINALLY, END, FI, IF, DO, ELSE, THEN,
-                    NEW, STOP, DONE, AWAIT, ASYNC, NLEX, NB, SELECT, READCH, WRITECH, ACTOR, SHARED, DEF, FNC, ROUTINE, FOR, OF, LOOP, BLOCK, BREAK, CONTINUE, YIELD, SUPER, ELSEIF, SWITCH, MATCH, MATCHES, IS, WHEN, CASE, DEFAULT, FIRST, TYPE, TYPEOF,
+                    NEW, STOP, DONE, AWAIT, ASYNC, NLEX, NB, SELECT, READCH, WRITECH, ACTOR, SHARED, UNTRUSTED, DEF, FNC, ROUTINE, FOR, OF, LOOP, BLOCK, BREAK, CONTINUE, YIELD, SUPER, ELSEIF, SWITCH, MATCH, MATCHES, IS, WHEN, CASE, DEFAULT, FIRST, TYPE, TYPEOF,
                     INTERFACE, IMPL, ABSTRACT, VOID, STATIC, PUB, PRIVATE, STRUCTURAL, RETURN, DEFER,
                     VAL, CONST, LET, MUT, SELF, TRUE, FALSE, NULL, OBJ, ARR -> true;
             default -> false;
@@ -2008,6 +2008,10 @@ public final class Parser {
         return false;
     }
 
+    private static boolean isIdentifierLikeToken(Token.Type type) {
+        return type == IDENT || type == SHARED || type == UNTRUSTED;
+    }
+
     private boolean match(Token.Type... types) {
         for (Token.Type type : types) {
             if (check(type)) { advance(); return true; }
@@ -2020,7 +2024,11 @@ public final class Parser {
         throw error(peek(), message);
     }
 
-    private boolean check(Token.Type type) { return peek().type() == type; }
+    private boolean check(Token.Type type) {
+        return type == IDENT
+                ? isIdentifierLikeToken(peek().type())
+                : peek().type() == type;
+    }
     private boolean checkNext(Token.Type type) { return current + 1 < tokens.size() && tokens.get(current + 1).type() == type; }
 
     private boolean adjacent(Token left, Token right) {

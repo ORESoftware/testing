@@ -140,15 +140,12 @@ public final class LinkedProgramRunner {
                     List<String> ids = new ArrayList<>(build.units().keySet());
                     ids.sort(String::compareTo);
 
-                    try (OresLanguage.PrecheckedUnitScope ignored =
-                                 OresLanguage.usePrecheckedUnits(build.units())) {
-                        for (String id : ids) {
-                            IncrementalCompiler.CompiledUnit unit = build.units().get(id);
-                            Source source = Source.newBuilder(OresLanguage.ID, unit.sourceText(), id)
-                                    .mimeType(OresLanguage.MIME_TYPE)
-                                    .buildLiteral();
-                            parsedUnits.put(id, context.parse(source));
-                        }
+                    for (String id : ids) {
+                        IncrementalCompiler.CompiledUnit unit = build.units().get(id);
+                        Source source = Source.newBuilder(OresLanguage.ID, unit.sourceText(), id)
+                                .mimeType(OresLanguage.MIME_TYPE)
+                                .buildLiteral();
+                        parsedUnits.put(id, context.parse(source));
                     }
 
                     for (Map.Entry<String, Map<String, String>> importer : importResolutions.entrySet()) {

@@ -3429,6 +3429,14 @@ public final class ActorRuntime implements AutoCloseable {
             throw new SecurityException(
                     "actor lifecycle capabilities are execution-domain local and cannot cross actor mailboxes");
         }
+        if (value instanceof ActorRuntime.ActorGroup
+                || value instanceof ActorEventBus
+                || value instanceof ActorEventBus.Subscription<?>
+                || value instanceof ChannelRuntime.SelectSet
+                || value instanceof ChannelRuntime.SelectCase) {
+            throw new SecurityException(
+                    "runtime coordination handles are execution-domain local and cannot cross actor mailboxes");
+        }
         if (value instanceof ChannelRuntime.Channel<?>) {
             throw new IllegalArgumentException(
                     "channel capability is execution-domain local and cannot cross actor mailboxes");

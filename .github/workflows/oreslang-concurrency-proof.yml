@@ -25,3 +25,5 @@ jobs:
       - name: Actor, group, hungry, and security proof
         working-directory: .
         run: mvn -B -Dores.runtime.carriers=java -Dtest=ActorEventBusTest,ActorStructuredCancellationTest,HungryActorTest,SharedPrivateActorIsolationProofTest,UntrustedActorTest test
+      - name: Full Maven regression
+        run: mvn -B -Dores.runtime.carriers=java test

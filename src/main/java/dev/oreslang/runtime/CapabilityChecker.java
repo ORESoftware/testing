@@ -25,6 +25,7 @@ public final class CapabilityChecker {
     private final Set<String> ambiguousClasses = new HashSet<>();
     private final Set<String> ambiguousFunctions = new HashSet<>();
     private final Map<String, String> javaImports = new HashMap<>();
+    private final Set<String> importedRoots = new HashSet<>();
     private final Set<Ast.FunctionDecl> callableStack =
             java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
     private final Set<Ast.MethodDecl> methodStack =
@@ -35,6 +36,11 @@ public final class CapabilityChecker {
     private CapabilityChecker(Ast.Program program) {
         for (Ast.ImportDecl imported : program.imports()) {
             ImportRules.validate(imported);
+            if (imported.wildcard()) {
+                importedRoots.add(imported.namespace());
+            } else {
+                importedRoots.addAll(imported.names());
+            }
             if (!ImportRules.isJavaPath(imported.path())) continue;
             String className = ImportRules.javaClassName(imported.path());
             for (String binding : ImportRules.exposedBindings(imported)) {
@@ -197,13 +203,30 @@ public final class CapabilityChecker {
         }
     }
 
-    private static IsolatePolicy actorPolicy(Ast.ActorKind kind, IsolatePolicy parent) {
-        if (kind != Ast.ActorKind.PRIVATE) return parent;
-        return parent.withoutCapabilities(
-                IsolatePolicy.Capability.SHARED_MEMORY,
-                IsolatePolicy.Capability.ACTOR_SHARE_READONLY,
-                IsolatePolicy.Capability.JAVA_INTEROP,
-                IsolatePolicy.Capability.JAVA_SOURCE_INTEROP);
+    private static IsolatePolicy actorPolicy(
+            Ast.ActorKind kind,
+            IsolatePolicy parent) {
+        return switch (kind) {
+            case NONE, SHARED -> parent;
+            case PRIVATE -> parent.withoutCapabilities(
+                    IsolatePolicy.Capability.SHARED_MEMORY,
+                    IsolatePolicy.Capability.ACTOR_SHARE_READONLY,
+                    IsolatePolicy.Capability.JAVA_INTEROP,
+                    IsolatePolicy.Capability.JAVA_SOURCE_INTEROP);
+            case UNTRUSTED -> {
+                IsolatePolicy baseline = IsolatePolicy.untrustedActor();
+                long heap = Math.min(
+                        parent.maxHeapBytes(), baseline.maxHeapBytes());
+                int mailbox = Math.min(
+                        parent.maxMailboxMessages(), baseline.maxMailboxMessages());
+                java.time.Duration wall =
+                        parent.maxWallTime().compareTo(baseline.maxWallTime()) < 0
+                                ? parent.maxWallTime()
+                                : baseline.maxWallTime();
+                yield new IsolatePolicy(
+                        Set.of(), heap, mailbox, wall, true);
+            }
+        };
     }
 
     private void checkCallableTypes(
@@ -309,6 +332,18 @@ public final class CapabilityChecker {
             }
         }
 
+        if (expr instanceof Ast.NameExpr n
+                && isZeroAuthorityAdversarial(policy)
+                && (isRestrictedFacadeRoot(n.name())
+                        || importedRoots.contains(n.name()))) {
+            throw new SecurityException(
+                    importedRoots.contains(n.name())
+                            ? "untrusted actor cannot extract imported code without explicit effect metadata: "
+                                    + n.name()
+                            : "untrusted actor cannot extract restricted capability facade '"
+                                    + n.name() + "'");
+        }
+
         if (expr instanceof Ast.NameExpr n && n.name().equals("print")) {
             require(policy, IsolatePolicy.Capability.STDOUT, "print");
         } else if (expr instanceof Ast.NameExpr n && n.name().equals("SharedMutex")) {
@@ -322,6 +357,16 @@ public final class CapabilityChecker {
         }
         else if (expr instanceof Ast.CallExpr c) {
             String target = memberPath(c.callee());
+            if (isZeroAuthorityAdversarial(policy) && target != null) {
+                String root = target.contains(".")
+                        ? target.substring(0, target.indexOf('.'))
+                        : target;
+                if (importedRoots.contains(root)) {
+                    throw new SecurityException(
+                            "untrusted actor cannot call imported code without explicit effect metadata: "
+                                    + target);
+                }
+            }
             if (target != null) {
                 Ast.FunctionDecl fn = findFunction(target);
                 if (fn != null) checkReferencedFunction(fn, policy);
@@ -384,6 +429,19 @@ public final class CapabilityChecker {
             if (e.expressionBody() != null) checkExpr(e.expressionBody(), policy);
             if (e.blockBody() != null) checkStatements(e.blockBody(), policy);
         }
+    }
+
+    private static boolean isZeroAuthorityAdversarial(IsolatePolicy policy) {
+        return policy.adversarial() && policy.capabilities().isEmpty();
+    }
+
+    private static boolean isRestrictedFacadeRoot(String name) {
+        return switch (name) {
+            case "stdio", "process", "actor", "network", "ipc", "gpu",
+                    "fs", "env", "ffi", "polyglot", "thread",
+                    "SharedMutex", "print" -> true;
+            default -> false;
+        };
     }
 
     private static String memberPath(Ast.Expr expr) {

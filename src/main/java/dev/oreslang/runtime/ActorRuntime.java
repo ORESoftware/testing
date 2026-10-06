@@ -1649,6 +1649,56 @@ public final class ActorRuntime implements AutoCloseable {
                         + "; actor lifecycle authority is limited to self and structured descendants");
     }
 
+    public <M> ActorHandle<M> spawnChild(
+            ActorKind kind,
+            IsolatePolicy policy,
+            BehaviorFactory<M> behaviorFactory) {
+        Objects.requireNonNull(kind, "kind");
+        Objects.requireNonNull(policy, "policy");
+        Objects.requireNonNull(behaviorFactory, "behaviorFactory");
+
+        ActorCell<?> parent = currentActor.get();
+        if (parent == null) {
+            throw new IllegalStateException(
+                    "spawnChild requires an executing parent actor");
+        }
+
+        parent.policy.require(
+                IsolatePolicy.Capability.ACTOR_SPAWN,
+                "child actor spawn");
+
+        ActorRef<M> ref = spawnInternal(
+                kind,
+                policy,
+                behaviorFactory,
+                false);
+        return new ActorHandle<>(ref, parent.ref.id());
+    }
+
+    public <M> ActorHandle<M> spawnChildPrivate(
+            BehaviorFactory<M> behaviorFactory) {
+        return spawnChild(
+                ActorKind.PRIVATE,
+                defaultSpawnPolicy(),
+                behaviorFactory);
+    }
+
+    public <M> ActorHandle<M> spawnChildShared(
+            BehaviorFactory<M> behaviorFactory) {
+        return spawnChild(
+                ActorKind.SHARED,
+                defaultSpawnPolicy(),
+                behaviorFactory);
+    }
+
+    public <M> ActorHandle<M> spawnChildUntrusted(
+            BehaviorFactory<M> behaviorFactory) {
+        return spawnChild(
+                ActorKind.UNTRUSTED,
+                IsolatePolicy.untrustedActor(),
+                behaviorFactory);
+    }
+
     private IsolatePolicy defaultSpawnPolicy() {
         IsolatePolicy caller = currentActorPolicy();
         return caller == null ? policyCeiling : caller;

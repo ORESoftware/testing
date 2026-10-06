@@ -83,7 +83,7 @@ public final class OresEvalRootNode extends RootNode {
         }
         if (isControl(arguments, MAIN_ONLY_COMMAND)) {
             current.link();
-            return current.executeMain(new Object[0]);
+            return context.runRootMain(() -> current.executeMain(new Object[0]));
         }
         if (arguments.length >= 2
                 && INVOKE_PUBLIC_COMMAND.equals(arguments[0])
@@ -340,11 +340,10 @@ public final class OresEvalRootNode extends RootNode {
             Ast.FunctionDecl main = functions.get(Parser.ROOT_MODULE + ".main");
             if (main == null) main = findFunction("main");
             if (main == null) return null;
-            Object result = callFunction(main, List.of(arguments));
-            if (result instanceof CompletionStage<?> stage) {
-                return AsyncRuntime.await(stage);
-            }
-            return result;
+            // MAIN_ONLY is already executing inside OresVM's ROOT_TASK.
+            // Never park the CONTROL carrier on an async result here; the
+            // enclosing root Task owns the wait and fresh-resume transition.
+            return callFunction(main, List.of(arguments));
         }
 
         private Object invokePublic(String name, Object[] arguments) {
@@ -462,6 +461,7 @@ public final class OresEvalRootNode extends RootNode {
                 case NONE -> throw new AssertionError("non-actor callable reached actor lowering");
                 case PRIVATE -> ActorRuntime.ActorKind.PRIVATE;
                 case SHARED -> ActorRuntime.ActorKind.SHARED;
+                case UNTRUSTED -> ActorRuntime.ActorKind.UNTRUSTED;
             };
 
             return context.actors().invoke(
@@ -665,6 +665,9 @@ public final class OresEvalRootNode extends RootNode {
                 Env env,
                 ArrayDeque<Ast.Expr> deferred,
                 boolean inheritedTailBarrier) {
+            if (ActorRuntime.currentActorKind() == ActorRuntime.ActorKind.UNTRUSTED) {
+                context.schedulerSafepoint();
+            }
             if (stmt instanceof Ast.BindingStmt binding) {
                 if (binding.initializer() instanceof Ast.LambdaExpr) {
                     env.reserve(binding.name(), binding.kind());
@@ -1082,6 +1085,38 @@ public final class OresEvalRootNode extends RootNode {
             }
 
             Object value = eval(operation.value(), env);
+            if (operation.callback()) {
+                if (!ActorRuntime.inActorExecution()) {
+                    throw new IllegalStateException(
+                            "nb cb writech can only execute inside an actor turn");
+                }
+                OresFuture<Void> completion = channel.writeAsync(value);
+                ActorRuntime.ContinuationTarget target =
+                        context.actors().captureCurrentContinuationTarget();
+                Env callbackEnv = env.snapshot();
+                context.actors().enqueueOnCompletion(
+                        completion,
+                        target,
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                throw propagateAsyncFailure(OresFuture.unwrap(failure));
+                            }
+                            try {
+                                executeBlock(operation.callbackBody(), callbackEnv, true);
+                            } catch (ReturnSignal returned) {
+                                if (returned.value != null) {
+                                    throw new IllegalStateException(
+                                            "nb cb writech callback cannot return a value");
+                                }
+                            } catch (BreakSignal | ContinueSignal control) {
+                                throw new IllegalStateException(
+                                        "nb cb writech callback cannot break/continue an enclosing loop",
+                                        control);
+                            }
+                        });
+                return null;
+            }
+
             return switch (operation.mode()) {
                 case IMMEDIATE -> channel.tryWrite(value);
                 case NONBLOCKING -> channel.writeAsync(value);
@@ -1098,19 +1133,20 @@ public final class OresEvalRootNode extends RootNode {
                 OresFuture<?> future,
                 String operation) {
             if (future.isDone()) return future.join();
-            if (ActorRuntime.inActorExecution()) {
+            if (ActorRuntime.inActorExecution()
+                    || context.vm().isRootSchedulerCurrent()) {
                 // This registration belongs only to this attempted blocking
                 // operation. Remove it before failing closed so no waiter leaks.
                 future.cancel(false);
                 throw new IllegalStateException(
                         operation
-                                + " would suspend this actor, but the current interpreter has not yet "
-                                + "lowered this call stack to the OresScheduler resumable-task ABI; "
-                                + "the runtime refuses to park an actor carrier. Use nb "
-                                + operation
+                                + " would suspend a scheduler-owned actor/root turn, but the current "
+                                + "interpreter has not yet lowered this call stack to the OresScheduler "
+                                + "resumable-task ABI; the runtime refuses to park a scheduler carrier. "
+                                + "Use nb " + operation
                                 + " or a ready/immediate case until continuation lowering is active.");
             }
-            // Transitional root/embedder path. Actor carriers never reach here.
+            // Transitional host/embedder path. Scheduler carriers never reach here.
             return future.join();
         }
 

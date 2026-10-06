@@ -150,7 +150,7 @@ final class UntrustedActorTest {
     @Test
     void actorModifiersRemainContextualIdentifiers() {
         assertDoesNotThrow(() -> Parser.parse("""
-                fnc ordinary() => int {
+                fnc ordinary() : int {
                   val shared = 1;
                   val untrusted = shared + 1;
                   return untrusted;

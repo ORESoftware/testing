@@ -54,6 +54,30 @@ final class ConcurrencyContractProofTest {
         assertEquals("after-cancel", channel.tryRead().orElseThrow());
     }
 
+
+    @Test
+    void runtimeCoordinationHandlesCannotCrossActorMailbox() throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime(IsolatePolicy.developer())) {
+            ActorRuntime.ActorRef<Object> receiver =
+                    runtime.spawnShared(() -> (message, context) -> { });
+            ActorRuntime.ActorGroup group = runtime.createActorGroup();
+            runtime.setForceCancellationTreeHook(request -> true);
+            ActorRuntime.ActorControlHandle control =
+                    runtime.controlHandle(receiver);
+
+            assertThrows(SecurityException.class, () -> receiver.send(group));
+            assertThrows(SecurityException.class, () -> receiver.send(control));
+
+            ChannelRuntime.SelectSet set =
+                    ChannelRuntime.SelectSet.of(
+                            ChannelRuntime.read(new ChannelRuntime.Channel<>(1)));
+            assertThrows(SecurityException.class, () -> receiver.send(set));
+
+            receiver.stop();
+            group.close();
+        }
+    }
+
     @Test
     void futureWriteCompletionCallbackReturnsThroughActorMailboxNotProducerThread()
             throws Exception {

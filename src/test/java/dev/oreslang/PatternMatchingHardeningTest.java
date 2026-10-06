@@ -80,7 +80,7 @@ final class PatternMatchingHardeningTest {
                     }
 
                     fnc classify(Animal animal): int {
-                      if animal is Dog dog then
+                      if animal is type Dog dog then
                         return acceptDog(dog);
                       else
                         return 0;
@@ -249,7 +249,7 @@ final class PatternMatchingHardeningTest {
                 end
 
                 fnc classify(Animal animal): int {
-                  if animal is Dog dog then
+                  if animal is type Dog dog then
                     return 7;
                   else
                     return 0;
@@ -313,7 +313,7 @@ final class PatternMatchingHardeningTest {
                     }
 
                     fnc bad(Animal animal): void {
-                      if animal is Dog dog then
+                      if animal is type Dog dog then
                         consume(dog);
                         consume(dog);
                       fi

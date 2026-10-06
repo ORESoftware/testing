@@ -146,11 +146,6 @@ final class ImportGraph {
                             && klass.actorKind() == Ast.ActorKind.NONE
                             && klass.name().equals(name);
                     case INTERFACE -> decl instanceof Ast.InterfaceDecl iface
-                            && iface.contractKind() == Ast.ContractKind.INTERFACE
-                            && iface.visibility() == Ast.Visibility.PUBLIC
-                            && iface.name().equals(name);
-                    case TRAIT -> decl instanceof Ast.InterfaceDecl iface
-                            && iface.contractKind() == Ast.ContractKind.TRAIT
                             && iface.visibility() == Ast.Visibility.PUBLIC
                             && iface.name().equals(name);
                     case TYPE -> decl instanceof Ast.TypeAliasDecl alias
@@ -160,7 +155,7 @@ final class ImportGraph {
                                     && iface.name().equals(name))
                             || (decl instanceof Ast.TypeAliasDecl alias
                                     && alias.name().equals(name));
-                    case STRUCT -> false;
+                    case TRAIT, STRUCT -> false;
                     case ALL -> (decl instanceof Ast.FunctionDecl fn
                                     && fn.visibility() == Ast.Visibility.PUBLIC
                                     && fn.name().equals(name))
@@ -172,131 +167,6 @@ final class ImportGraph {
             }
         }
         return matches;
-    }
-
-    /**
-     * Resolve the public interface declarations explicitly selected by one
-     * code unit. This is compiler metadata only; it does not make the imported
-     * unit available as a runtime value and does not broaden filesystem access.
-     */
-    static Map<String, Ast.InterfaceDecl> resolveImportedInterfaces(
-            String importerId,
-            Map<String, Ast.Program> programs,
-            Map<String, Map<String, String>> importResolutions) {
-        LinkedHashMap<String, Ast.InterfaceDecl> result = new LinkedHashMap<>();
-        Ast.Program importer = programs.get(normalizeUnitId(importerId));
-        if (importer == null) {
-            throw new IllegalArgumentException("unknown importer source unit '" + importerId + "'");
-        }
-
-        for (Ast.ImportDecl imported : importer.imports()) {
-            if (imported.wildcard()
-                    || (imported.kind() != Ast.ImportKind.INTERFACE
-                        && imported.kind() != Ast.ImportKind.TRAIT
-                        && imported.kind() != Ast.ImportKind.TYPES)) {
-                continue;
-            }
-
-            String targetId = resolveImportUnitId(
-                    importerId, imported, programs.keySet(), importResolutions);
-            if (targetId == null) continue;
-            Ast.Program target = programs.get(targetId);
-            if (target == null) continue;
-
-            for (String sourceName : imported.names()) {
-                Ast.ContractKind requiredKind = switch (imported.kind()) {
-                    case INTERFACE -> Ast.ContractKind.INTERFACE;
-                    case TRAIT -> Ast.ContractKind.TRAIT;
-                    default -> null;
-                };
-                Ast.InterfaceDecl iface = exportedInterface(target, sourceName, requiredKind);
-                if (iface == null) continue; // import types may select a type alias.
-                String localName = ImportRules.localName(imported, sourceName);
-                Ast.InterfaceDecl previous = result.putIfAbsent(localName, iface);
-                if (previous != null && previous != iface) {
-                    throw new IllegalArgumentException(
-                            "imported contract binding '" + localName + "' is ambiguous in '" + importerId + "'");
-                }
-            }
-        }
-        return Map.copyOf(result);
-    }
-
-    private static Ast.InterfaceDecl exportedInterface(
-            Ast.Program program,
-            String name,
-            Ast.ContractKind requiredKind) {
-        Ast.InterfaceDecl found = null;
-        for (Ast.ModuleDecl module : program.modules()) {
-            for (Ast.Decl decl : module.declarations()) {
-                if (!(decl instanceof Ast.InterfaceDecl iface)
-                        || iface.visibility() != Ast.Visibility.PUBLIC
-                        || !iface.name().equals(name)
-                        || (requiredKind != null && iface.contractKind() != requiredKind)) {
-                    continue;
-                }
-                if (found != null && found != iface) {
-                    throw new IllegalArgumentException(
-                            "exported contract '" + name + "' is ambiguous in linked source unit");
-                }
-                found = iface;
-            }
-        }
-        return found;
-    }
-
-    record ResolvedModuleImport(String targetUnitId, Ast.ModuleDecl module) { }
-
-    /**
-     * Resolve named runtime module imports so the importing type checker can
-     * retain the provider's exact public module shape instead of degrading the
-     * value to Unknown.
-     */
-    static Map<String, ResolvedModuleImport> resolveImportedModules(
-            String importerId,
-            Map<String, Ast.Program> programs,
-            Map<String, Map<String, String>> importResolutions) {
-        LinkedHashMap<String, ResolvedModuleImport> result = new LinkedHashMap<>();
-        Ast.Program importer = programs.get(normalizeUnitId(importerId));
-        if (importer == null) {
-            throw new IllegalArgumentException("unknown importer source unit '" + importerId + "'");
-        }
-
-        for (Ast.ImportDecl imported : importer.imports()) {
-            if (imported.wildcard() || imported.kind() != Ast.ImportKind.MODULE) continue;
-
-            String targetId = resolveImportUnitId(
-                    importerId, imported, programs.keySet(), importResolutions);
-            if (targetId == null) continue;
-            Ast.Program target = programs.get(targetId);
-            if (target == null) continue;
-
-            for (String sourceName : imported.names()) {
-                Ast.ModuleDecl module = exportedModule(target, sourceName);
-                if (module == null) continue;
-                String localName = ImportRules.localName(imported, sourceName);
-                ResolvedModuleImport previous = result.putIfAbsent(
-                        localName, new ResolvedModuleImport(targetId, module));
-                if (previous != null && previous.module() != module) {
-                    throw new IllegalArgumentException(
-                            "imported module binding '" + localName + "' is ambiguous in '" + importerId + "'");
-                }
-            }
-        }
-        return Map.copyOf(result);
-    }
-
-    private static Ast.ModuleDecl exportedModule(Ast.Program program, String name) {
-        Ast.ModuleDecl found = null;
-        for (Ast.ModuleDecl module : program.modules()) {
-            if (!module.name().equals(name)) continue;
-            if (found != null && found != module) {
-                throw new IllegalArgumentException(
-                        "exported module '" + name + "' is ambiguous in linked source unit");
-            }
-            found = module;
-        }
-        return found;
     }
 
     /**

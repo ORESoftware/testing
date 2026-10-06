@@ -4,7 +4,6 @@ import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.RootCallTarget;
 import com.oracle.truffle.api.TruffleLanguage;
 import dev.oreslang.ast.Ast;
-import dev.oreslang.compiler.IncrementalCompiler;
 import dev.oreslang.compiler.OresCompiler;
 import dev.oreslang.nodes.OresEvalRootNode;
 import dev.oreslang.nodes.OresInteropRootNode;
@@ -15,7 +14,6 @@ import org.graalvm.polyglot.SandboxPolicy;
 
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
-import java.util.Map;
 
 @TruffleLanguage.Registration(
         id = OresLanguage.ID,
@@ -29,26 +27,6 @@ import java.util.Map;
 public final class OresLanguage extends TruffleLanguage<OresContext> {
     public static final String ID = "ores";
     public static final String MIME_TYPE = "application/x-oreslang";
-
-    /**
-     * Host-only bridge from the closed-world linker into Truffle parsing.
-     * A prechecked AST is reused only when both the canonical code-unit id and
-     * the complete source text match the compiled unit exactly.
-     */
-    private static final ThreadLocal<Map<String, IncrementalCompiler.CompiledUnit>> PRECHECKED_UNITS =
-            ThreadLocal.withInitial(Map::of);
-
-    @FunctionalInterface
-    public interface PrecheckedUnitScope extends AutoCloseable {
-        @Override void close();
-    }
-
-    public static PrecheckedUnitScope usePrecheckedUnits(
-            Map<String, IncrementalCompiler.CompiledUnit> units) {
-        Map<String, IncrementalCompiler.CompiledUnit> previous = PRECHECKED_UNITS.get();
-        PRECHECKED_UNITS.set(Map.copyOf(units));
-        return () -> PRECHECKED_UNITS.set(previous);
-    }
 
     @Override
     protected OresContext createContext(Env env) {
@@ -85,6 +63,7 @@ public final class OresLanguage extends TruffleLanguage<OresContext> {
     protected CallTarget parse(ParsingRequest request) {
         var source = request.getSource();
         String text = source.getCharacters().toString();
+        Ast.Program program = OresCompiler.parseAndTypeCheck(text);
         String codeUnitId = source.getPath();
         if (codeUnitId == null || codeUnitId.isBlank()) {
             codeUnitId = source.getName();
@@ -96,12 +75,6 @@ public final class OresLanguage extends TruffleLanguage<OresContext> {
             }
         }
         if (codeUnitId == null || codeUnitId.isBlank()) codeUnitId = "<anonymous>";
-
-        IncrementalCompiler.CompiledUnit prechecked = PRECHECKED_UNITS.get().get(codeUnitId);
-        Ast.Program program = prechecked != null && prechecked.sourceText().equals(text)
-                ? prechecked.program()
-                : OresCompiler.parseAndTypeCheck(text);
-
         RootCallTarget evaluator = new OresEvalRootNode(this, program, codeUnitId).getCallTarget();
         return new OresInteropRootNode(this, evaluator).getCallTarget();
     }

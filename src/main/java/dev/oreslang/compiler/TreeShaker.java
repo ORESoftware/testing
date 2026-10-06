@@ -489,7 +489,7 @@ public final class TreeShaker {
                 for (Ast.Decl declaration : module.declarations()) {
                     declarations.add(rewriteDeclaration(module.name(), declaration));
                 }
-                modules.add(new Ast.ModuleDecl(module.name(), module.annotations(), module.contracts(), declarations));
+                modules.add(new Ast.ModuleDecl(module.name(), module.annotations(), declarations));
             }
             return new Ast.Program(program.namespace(), program.imports(), modules);
         }
@@ -1222,7 +1222,7 @@ public final class TreeShaker {
                     }
                 }
                 if (!declarations.isEmpty()) {
-                    modules.add(new Ast.ModuleDecl(module.name(), module.annotations(), module.contracts(), declarations));
+                    modules.add(new Ast.ModuleDecl(module.name(), module.annotations(), declarations));
                 }
             }
 

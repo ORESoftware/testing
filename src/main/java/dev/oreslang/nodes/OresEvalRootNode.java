@@ -881,7 +881,7 @@ public final class OresEvalRootNode extends RootNode {
                 for (Ast.SwitchCase arm : switched.cases()) {
                     boolean selected = false;
                     for (Ast.Expr constant : arm.constants()) {
-                        if (Objects.equals(subject, eval(constant, env))) {
+                        if (valueEquals(subject, eval(constant, env))) {
                             selected = true;
                             break;
                         }
@@ -2421,7 +2421,7 @@ public final class OresEvalRootNode extends RootNode {
                 return true;
             }
             if (pattern instanceof Ast.LiteralPattern literal) {
-                return Objects.equals(literal.value(), value);
+                return valueEquals(literal.value(), value);
             }
             if (pattern instanceof Ast.TypePattern typed) {
                 if (!oresTypeMatches(value, typed.type())) return false;
@@ -2568,7 +2568,9 @@ public final class OresEvalRootNode extends RootNode {
             return switch (op) {
                 case "+" -> add(left, right); case "-" -> numeric(left, right, '-'); case "*" -> numeric(left, right, '*');
                 case "/" -> numeric(left, right, '/'); case "%" -> numeric(left, right, '%');
-                case "==" -> Objects.equals(left, right); case "!=" -> !Objects.equals(left, right);
+                case "eq", "==" -> valueEquals(left, right);
+                case "neq", "!=" -> !valueEquals(left, right);
+                case "is" -> identityEquals(left, right);
                 case "<" -> compare(left, right) < 0; case "<=" -> compare(left, right) <= 0;
                 case ">" -> compare(left, right) > 0; case ">=" -> compare(left, right) >= 0;
                 case "&" -> integralLong(left) & integralLong(right);
@@ -2579,6 +2581,166 @@ public final class OresEvalRootNode extends RootNode {
                 case ">>>" -> integralLong(left) >>> shiftDistance(right);
                 default -> throw new IllegalArgumentException("unsupported operator " + op);
             };
+        }
+
+        private boolean identityEquals(Object left, Object right) {
+            if (left == right) return true;
+            if (left == null || right == null) return false;
+
+            if (left instanceof ActorRuntime.ActorId && right instanceof ActorRuntime.ActorId) {
+                return left.equals(right);
+            }
+            if (left instanceof ActorRuntime.ActorRef<?> a
+                    && right instanceof ActorRuntime.ActorRef<?> b) {
+                return a.kind() == b.kind() && a.id().equals(b.id());
+            }
+
+            // Other identity-bearing values use guest reference identity.
+            // Never delegate identity to host equals().
+            return false;
+        }
+
+        private boolean valueEquals(Object left, Object right) {
+            return valueEquals(left, right, new IdentityHashMap<>());
+        }
+
+        private boolean valueEquals(
+                Object left,
+                Object right,
+                IdentityHashMap<Object, IdentityHashMap<Object, Boolean>> seen) {
+            if (left == right) return true;
+            if (left == null || right == null) return false;
+
+            if (left instanceof Number a && right instanceof Number b) {
+                return numericValueEquals(a, b);
+            }
+            if (left instanceof Complex || right instanceof Complex) {
+                try {
+                    Complex a = asComplex(left);
+                    Complex b = asComplex(right);
+                    return a.real == b.real && a.imaginary == b.imaginary;
+                } catch (IllegalArgumentException ignored) {
+                    return false;
+                }
+            }
+
+            // Class/actor instances have identity equality by default.
+            if (left instanceof OresObject || right instanceof OresObject) return false;
+
+            if (left instanceof ActorRuntime.ActorId || right instanceof ActorRuntime.ActorId) {
+                return left instanceof ActorRuntime.ActorId
+                        && right instanceof ActorRuntime.ActorId
+                        && left.equals(right);
+            }
+            if (left instanceof ActorRuntime.ActorRef<?> || right instanceof ActorRuntime.ActorRef<?>) {
+                return left instanceof ActorRuntime.ActorRef<?> a
+                        && right instanceof ActorRuntime.ActorRef<?> b
+                        && a.kind() == b.kind()
+                        && a.id().equals(b.id());
+            }
+
+            if (left instanceof OptionValue || right instanceof OptionValue) {
+                if (!(left instanceof OptionValue a) || !(right instanceof OptionValue b)) return false;
+                if (a.present() != b.present()) return false;
+                if (!a.present()) return true;
+                if (comparisonPairSeen(left, right, seen)) return true;
+                return valueEquals(a.value(), b.value(), seen);
+            }
+
+            if (left instanceof ResultValue || right instanceof ResultValue) {
+                if (!(left instanceof ResultValue a) || !(right instanceof ResultValue b)) return false;
+                if (a.ok() != b.ok()) return false;
+                if (comparisonPairSeen(left, right, seen)) return true;
+                return valueEquals(a.value(), b.value(), seen);
+            }
+
+            if (left instanceof GeneratorRuntime.Step<?> || right instanceof GeneratorRuntime.Step<?>) {
+                if (!(left instanceof GeneratorRuntime.Step<?> a)
+                        || !(right instanceof GeneratorRuntime.Step<?> b)) return false;
+                if (a.done() != b.done()) return false;
+                if (a.done()) return true;
+                if (comparisonPairSeen(left, right, seen)) return true;
+                return valueEquals(a.value(), b.value(), seen);
+            }
+
+            Map<?, ?> leftFields = structuralFields(left);
+            Map<?, ?> rightFields = structuralFields(right);
+            if (leftFields != null || rightFields != null) {
+                if (leftFields == null || rightFields == null || leftFields.size() != rightFields.size()) return false;
+                if (comparisonPairSeen(left, right, seen)) return true;
+                for (Map.Entry<?, ?> entry : leftFields.entrySet()) {
+                    Object key = entry.getKey();
+                    if (!rightFields.containsKey(key)) return false;
+                    if (!valueEquals(entry.getValue(), rightFields.get(key), seen)) return false;
+                }
+                return true;
+            }
+
+            int leftSize = sequenceSize(left);
+            int rightSize = sequenceSize(right);
+            if (leftSize >= 0 || rightSize >= 0) {
+                if (leftSize < 0 || rightSize < 0 || leftSize != rightSize) return false;
+                if (comparisonPairSeen(left, right, seen)) return true;
+                for (int i = 0; i < leftSize; i++) {
+                    if (!valueEquals(sequenceElement(left, i), sequenceElement(right, i), seen)) return false;
+                }
+                return true;
+            }
+
+            if (isScalarEqualityCarrier(left) && isScalarEqualityCarrier(right)) {
+                return Objects.equals(left, right);
+            }
+
+            return false;
+        }
+
+        private boolean numericValueEquals(Number left, Number right) {
+            if (left instanceof java.math.BigDecimal || right instanceof java.math.BigDecimal
+                    || left instanceof java.math.BigInteger || right instanceof java.math.BigInteger) {
+                try {
+                    return new java.math.BigDecimal(left.toString())
+                            .compareTo(new java.math.BigDecimal(right.toString())) == 0;
+                } catch (NumberFormatException ignored) {
+                    return left.doubleValue() == right.doubleValue();
+                }
+            }
+            if (isIntegral(left) && isIntegral(right)) return left.longValue() == right.longValue();
+            return left.doubleValue() == right.doubleValue();
+        }
+
+        private boolean isScalarEqualityCarrier(Object value) {
+            return value instanceof String
+                    || value instanceof Boolean
+                    || value instanceof Character
+                    || value instanceof Enum<?>
+                    || value instanceof java.util.UUID
+                    || value instanceof OptionUnwrapError;
+        }
+
+        private boolean comparisonPairSeen(
+                Object left,
+                Object right,
+                IdentityHashMap<Object, IdentityHashMap<Object, Boolean>> seen) {
+            IdentityHashMap<Object, Boolean> rights =
+                    seen.computeIfAbsent(left, ignored -> new IdentityHashMap<>());
+            return rights.put(right, Boolean.TRUE) != null;
+        }
+
+        private Map<?, ?> structuralFields(Object value) {
+            if (value instanceof DynamicStructValue dynamic) return dynamic.fields;
+            if (value instanceof Map<?, ?> map) return map;
+            return null;
+        }
+
+        private int sequenceSize(Object value) {
+            if (value instanceof List<?> list) return list.size();
+            if (value instanceof Object[] array) return array.length;
+            return -1;
+        }
+
+        private Object sequenceElement(Object value, int index) {
+            if (value instanceof List<?> list) return list.get(index);
+            return ((Object[]) value)[index];
         }
 
         private Object add(Object left, Object right) {

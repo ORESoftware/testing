@@ -10,7 +10,6 @@ import dev.oreslang.types.Types.Borrow;
 import dev.oreslang.types.Types.ClassNamespace;
 import dev.oreslang.types.Types.Generic;
 import dev.oreslang.types.Types.ListType;
-import dev.oreslang.types.Types.ModuleType;
 import dev.oreslang.types.Types.Named;
 import dev.oreslang.types.Types.Primitive;
 import dev.oreslang.types.Types.Record;
@@ -44,11 +43,9 @@ public final class TypeChecker {
     private final Map<String, Ast.InterfaceDecl> interfaces = new HashMap<>();
     private final Map<String, Ast.TypeAliasDecl> typeAliases = new HashMap<>();
     private final Map<String, Ast.ModuleDecl> modules = new HashMap<>();
-    private final Map<String, ModuleType> importedModules = new HashMap<>();
 
     private final IdentityHashMap<Ast.ClassDecl, String> classOwners = new IdentityHashMap<>();
     private final IdentityHashMap<Ast.InterfaceDecl, String> interfaceOwners = new IdentityHashMap<>();
-    private final IdentityHashMap<Ast.InterfaceDecl, String> importedInterfaceNames = new IdentityHashMap<>();
     private final IdentityHashMap<Ast.ClassDecl, Record> classShapeCache = new IdentityHashMap<>();
 
     private final Set<String> ambiguousFunctions = new HashSet<>();
@@ -64,180 +61,20 @@ public final class TypeChecker {
     private int loopDepth;
 
     public static Ast.Program check(Ast.Program program) {
-        return check(program, Map.of(), Map.of());
-    }
-
-    public static Ast.Program check(
-            Ast.Program program,
-            Map<String, Ast.InterfaceDecl> importedInterfaces) {
-        return check(program, importedInterfaces, Map.of());
-    }
-
-    /**
-     * Type-check one code unit with the public contracts and module handles
-     * selected by its already-resolved imports. Imported contracts are
-     * type-only; imported modules retain a precise public shape without
-     * granting any additional filesystem/runtime authority.
-     */
-    public static Ast.Program check(
-            Ast.Program program,
-            Map<String, Ast.InterfaceDecl> importedInterfaces,
-            Map<String, ModuleType> importedModuleTypes) {
         program = AnnotationExpander.expand(program);
         TypeChecker checker = new TypeChecker();
         checker.validateImports(program);
-        checker.collectImportedInterfaces(importedInterfaces);
-        checker.collectImportedModules(importedModuleTypes);
         checker.collect(program);
         checker.validate(program);
         OwnershipChecker.check(program);
         return program;
     }
 
-    /**
-     * Compute one exported module's precise first-class type in the provider's
-     * own import/type context. The caller is still responsible for validating
-     * the provider unit as a whole.
-     */
-    public static ModuleType exportedModuleType(
-            Ast.Program program,
-            Map<String, Ast.InterfaceDecl> importedInterfaces,
-            String moduleName) {
-        program = AnnotationExpander.expand(program);
-        TypeChecker checker = new TypeChecker();
-        checker.validateImports(program);
-        checker.collectImportedInterfaces(importedInterfaces);
-        checker.collect(program);
-        Ast.ModuleDecl module = checker.modules.get(moduleName);
-        if (module == null || module.name().equals(Parser.ROOT_MODULE)) {
-            throw new IllegalArgumentException("unknown exported module '" + moduleName + "'");
-        }
-        return checker.moduleType(module);
-    }
-
-    /**
-     * Builds the first-class Module<Contract> type represented by a visible
-     * interface/trait reference. This is a trusted compiler/host API used by
-     * contract-aware loaders; it grants no runtime or filesystem authority.
-     */
-    public static ModuleType moduleContractType(
-            Ast.Program program,
-            Map<String, Ast.InterfaceDecl> importedInterfaces,
-            Ast.TypeRef contractRef) {
-        if (contractRef == null) throw new IllegalArgumentException("module contract reference cannot be null");
-        program = AnnotationExpander.expand(program);
-        TypeChecker checker = new TypeChecker();
-        checker.validateImports(program);
-        checker.collectImportedInterfaces(importedInterfaces);
-        checker.collect(program);
-
-        Ast.InterfaceDecl iface = checker.findInterface(contractRef.name());
-        if (iface == null) {
-            throw new IllegalArgumentException(
-                    "unknown module contract '" + contractRef.name() + "'");
-        }
-        Type resolved = checker.resolve(contractRef, Set.of(), null);
-        if (!(resolved instanceof Named named)) {
-            throw new IllegalArgumentException(
-                    "module contract must resolve to a named interface/trait type");
-        }
-        Record template = checker.interfaceShape(
-                iface,
-                Set.copyOf(iface.genericParameters()),
-                new LinkedHashSet<>());
-        Record expected = (Record) checker.substituteGenerics(
-                template,
-                checker.genericBindings(
-                        iface.genericParameters(),
-                        named.arguments(),
-                        "module contract " + iface.name()));
-        return new ModuleType(contractRef.name(), expected);
-    }
-
-    public static ModuleType moduleContractType(
-            Ast.Program program,
-            Ast.TypeRef contractRef) {
-        return moduleContractType(program, Map.of(), contractRef);
-    }
-
-    /**
-     * Proves that one real exported module satisfies a host-required
-     * Module<Contract> type and returns the precise actual module type.
-     *
-     * This is deliberately stronger than Types.isAssignable alone because the
-     * checker retains class/interface inheritance and structural rules needed
-     * by member types inside the module shape.
-     */
-    public static ModuleType requireExportedModuleAssignable(
-            Ast.Program program,
-            Map<String, Ast.InterfaceDecl> importedInterfaces,
-            String moduleName,
-            ModuleType requiredType) {
-        if (requiredType == null) throw new IllegalArgumentException("required module type cannot be null");
-        program = AnnotationExpander.expand(program);
-        TypeChecker checker = new TypeChecker();
-        checker.validateImports(program);
-        checker.collectImportedInterfaces(importedInterfaces);
-        checker.collect(program);
-
-        Ast.ModuleDecl module = checker.modules.get(moduleName);
-        if (module == null || module.name().equals(Parser.ROOT_MODULE)) {
-            throw new IllegalArgumentException("unknown exported module '" + moduleName + "'");
-        }
-
-        ModuleType actual = checker.moduleType(module);
-        if (!checker.assignable(actual, requiredType)) {
-            throw new IllegalArgumentException(
-                    "loaded module '" + moduleName + "' does not satisfy required "
-                            + requiredType.name() + ": expected " + requiredType.shape()
-                            + " but got " + actual.shape());
-        }
-        return actual;
-    }
-
-    public static ModuleType requireExportedModuleAssignable(
-            Ast.Program program,
-            String moduleName,
-            ModuleType requiredType) {
-        return requireExportedModuleAssignable(program, Map.of(), moduleName, requiredType);
-    }
-
-    private void collectImportedInterfaces(Map<String, Ast.InterfaceDecl> imported) {
-        if (imported == null) throw new IllegalArgumentException("imported contract map cannot be null");
-        for (Map.Entry<String, Ast.InterfaceDecl> entry : imported.entrySet()) {
-            String localName = entry.getKey();
-            Ast.InterfaceDecl iface = entry.getValue();
-            if (localName == null || localName.isBlank() || iface == null) {
-                throw new IllegalArgumentException("imported contracts require a non-blank local name and declaration");
-            }
-            Ast.InterfaceDecl previous = interfaces.putIfAbsent(localName, iface);
-            if (previous != null && previous != iface) {
-                throw new IllegalArgumentException("duplicate imported contract binding '" + localName + "'");
-            }
-            importedInterfaceNames.putIfAbsent(iface, localName);
-        }
-    }
-
-    private void collectImportedModules(Map<String, ModuleType> imported) {
-        if (imported == null) throw new IllegalArgumentException("imported module type map cannot be null");
-        for (Map.Entry<String, ModuleType> entry : imported.entrySet()) {
-            String localName = entry.getKey();
-            ModuleType moduleType = entry.getValue();
-            if (localName == null || localName.isBlank() || moduleType == null) {
-                throw new IllegalArgumentException("imported modules require a non-blank local name and type");
-            }
-            ModuleType previous = importedModules.putIfAbsent(localName, moduleType);
-            if (previous != null && !previous.equals(moduleType)) {
-                throw new IllegalArgumentException("duplicate imported module binding '" + localName + "'");
-            }
-        }
-    }
-
     private void validateImports(Ast.Program program) {
         Set<String> exposed = new HashSet<>();
         Set<String> localNames = new HashSet<>(Set.of(
                 "stdio", "process", "actor", "print", "Some", "None", "Ok", "Err",
-                "Mutex", "SharedMutex", "Object", "List", "Option", "Result", "Future", "Module",
+                "Mutex", "SharedMutex", "Object", "List", "Option", "Result", "Future",
                 "Iterator", "AsyncIterator", "IteratorResult", "Generator", "AsyncGenerator",
                 "int", "uint", "float", "decimal", "complex", "bool", "String", "void",
                 "self", "null"));
@@ -361,47 +198,21 @@ public final class TypeChecker {
     }
 
     private void checkModuleAdherence(Ast.ModuleDecl module) {
-        List<Ast.TypeRef> contracts = new ArrayList<>(module.contracts());
-
-        // Keep the existing annotation spelling as a compatibility bridge.
         for (Ast.Annotation annotation : module.annotations()) {
             if (!annotation.name().equals("AdheresTo")) continue;
-            if (annotation.arguments().isEmpty()) {
-                throw new IllegalArgumentException("@AdheresTo requires at least one interface");
-            }
-            contracts.addAll(annotation.arguments());
-        }
-
-        Set<String> seen = new LinkedHashSet<>();
-        Record actual = null;
-        for (Ast.TypeRef ref : contracts) {
-            String contractKey = ref.toString();
-            if (!seen.add(contractKey)) {
-                throw new IllegalArgumentException(
-                        "duplicate module contract '" + ref.name() + "' on module '" + module.name() + "'");
-            }
-            Ast.InterfaceDecl iface = findInterface(ref.name());
-            if (iface == null) {
-                throw new IllegalArgumentException("unknown module interface '" + ref.name() + "'");
-            }
-            Type resolvedRef = resolve(ref, Set.of(), null);
-            if (!(resolvedRef instanceof Named namedRef)) {
-                throw new IllegalArgumentException(
-                        "module contract target must be a named interface type");
-            }
-            Record expectedTemplate =
-                    interfaceShape(iface, Set.copyOf(iface.genericParameters()), new LinkedHashSet<>());
-            Record expected = (Record) substituteGenerics(
-                    expectedTemplate,
-                    genericBindings(
-                            iface.genericParameters(),
-                            namedRef.arguments(),
-                            "interface " + iface.name()));
-            if (actual == null) actual = moduleShape(module);
-            if (!assignable(actual, expected)) {
-                throw new IllegalArgumentException(
-                        "module '" + module.name() + "' does not adhere to interface '" + ref.name()
-                                + "': expected " + expected + " but got " + actual);
+            if (annotation.arguments().isEmpty()) throw new IllegalArgumentException("@AdheresTo requires at least one interface");
+            Record actual = moduleShape(module);
+            for (Ast.TypeRef ref : annotation.arguments()) {
+                Ast.InterfaceDecl iface = findInterface(ref.name());
+                if (iface == null) throw new IllegalArgumentException("unknown module interface '" + ref.name() + "'");
+                Type resolvedRef = resolve(ref, Set.of(), null);
+                if (!(resolvedRef instanceof Named namedRef)) throw new IllegalArgumentException("@AdheresTo target must be a named interface type");
+                Record expectedTemplate = interfaceShape(iface, Set.copyOf(iface.genericParameters()), new LinkedHashSet<>());
+                Record expected = (Record) substituteGenerics(expectedTemplate,
+                        genericBindings(iface.genericParameters(), namedRef.arguments(), "interface " + iface.name()));
+                if (!assignable(actual, expected)) {
+                    throw new IllegalArgumentException("module '" + module.name() + "' does not adhere to interface '" + ref.name() + "': expected " + expected + " but got " + actual);
+                }
             }
         }
     }
@@ -429,24 +240,9 @@ public final class TypeChecker {
             } else if (decl instanceof Ast.FieldDecl field && field.visibility() == Ast.Visibility.PUBLIC) {
                 Type type = field.type() == null ? typeOf(field.initializer(), new Env(null), Set.of(), null) : resolve(field.type(), Set.of(), null);
                 mergeMember(members, field.name(), type, "module " + module.name());
-                mergeMember(
-                        members,
-                        fieldBindingContractKey(field.name()),
-                        fieldBindingContractType(field.bindingKind()),
-                        "module " + module.name());
             }
         }
         return new Record(members);
-    }
-
-    private ModuleType moduleType(Ast.ModuleDecl module) {
-        return new ModuleType(module.name(), moduleShape(module));
-    }
-
-    private Record structuralRecord(Type type) {
-        if (type instanceof Record record) return record;
-        if (type instanceof ModuleType module) return module.shape();
-        return null;
     }
 
     private void checkInterface(Ast.InterfaceDecl iface) {
@@ -1228,9 +1024,7 @@ public final class TypeChecker {
             if (name.name().equals("print")) return new Function(List.of(Unknown.INSTANCE), Primitive.VOID);
             if (name.name().equals("None")) return new Named("Option", List.of(Unknown.INSTANCE));
             Ast.ModuleDecl moduleNamespace = modules.get(name.name());
-            if (moduleNamespace != null) return moduleType(moduleNamespace);
-            ModuleType importedModule = importedModules.get(name.name());
-            if (importedModule != null) return importedModule;
+            if (moduleNamespace != null) return moduleShape(moduleNamespace);
             Ast.ClassDecl classNamespace = findClass(name.name());
             if (classNamespace != null) return new ClassNamespace(qualifiedClassName(classNamespace));
             if (importedValues.contains(name.name())) return Unknown.INSTANCE;
@@ -1347,7 +1141,19 @@ public final class TypeChecker {
                     requireInteger(right, "bitwise right operand");
                     yield Primitive.INT;
                 }
-                case "==", "!=" -> Primitive.BOOL;
+                case "eq", "neq", "==", "!=" -> {
+                    requireEqualityComparable(left, right);
+                    yield Primitive.BOOL;
+                }
+                case "is" -> {
+                    requireIdentityBearing(left, "left operand of 'is'");
+                    requireIdentityBearing(right, "right operand of 'is'");
+                    if (!typesMayOverlap(deref(left), deref(right))) {
+                        throw new IllegalArgumentException(
+                                "identity operands have disjoint runtime domains: " + left + " and " + right);
+                    }
+                    yield Primitive.BOOL;
+                }
                 case "<", "<=", ">", ">=" -> {
                     if (!(Types.isNumeric(left) && Types.isNumeric(right)) && !(isStringLike(left) && isStringLike(right))) {
                         throw new IllegalArgumentException("comparison operands must both be numeric or both strings");
@@ -1519,10 +1325,9 @@ public final class TypeChecker {
                     receiver = unwrapMutexGuard(receiver);
                 }
 
-                Record structural = structuralRecord(receiver);
-                if (structural != null) {
+                if (receiver instanceof Record record) {
                     String prefix = CallableSelector.instance(member.member(), call.arguments().size()).mangledName() + "$generics";
-                    List<Map.Entry<String, Type>> candidates = structural.members().entrySet().stream()
+                    List<Map.Entry<String, Type>> candidates = record.members().entrySet().stream()
                             .filter(entry -> entry.getKey().startsWith(prefix))
                             .toList();
                     if (candidates.size() > 1) {
@@ -1802,11 +1607,7 @@ public final class TypeChecker {
             }
             if (member.receiver() instanceof Ast.NameExpr name
                     && (name.name().equals("process") || name.name().equals("actor"))) return Unknown.INSTANCE;
-            if (member.receiver() instanceof Ast.NameExpr name
-                    && importedValues.contains(name.name())
-                    && !importedModules.containsKey(name.name())) {
-                return Unknown.INSTANCE;
-            }
+            if (member.receiver() instanceof Ast.NameExpr name && importedValues.contains(name.name())) return Unknown.INSTANCE;
 
             if (receiver instanceof ClassNamespace classNamespace) {
                 Ast.ClassDecl klass = findClass(classNamespace.className());
@@ -1829,13 +1630,12 @@ public final class TypeChecker {
                 throw new IllegalArgumentException("unknown static member '" + member.member() + "' on " + klass.name());
             }
 
-            Record structural = structuralRecord(receiver);
-            if (structural != null) {
-                Type result = structural.members().get(member.member());
+            if (receiver instanceof Record record) {
+                Type result = record.members().get(member.member());
                 if (result != null) return result;
 
                 String methodPrefix = CallableSelector.instance(member.member(), 0).mangledName().replace("$arity0", "$arity");
-                boolean structuralMethod = structural.members().keySet().stream()
+                boolean structuralMethod = record.members().keySet().stream()
                         .anyMatch(key -> key.startsWith(methodPrefix) && key.contains("$generics"));
                 if (structuralMethod) {
                     throw new IllegalArgumentException(
@@ -2039,16 +1839,6 @@ public final class TypeChecker {
             if (contextual != null) return contextual;
         }
         if (expr instanceof Ast.ListExpr list) {
-            if (expected instanceof ListType expectedList
-                    && !containsContextualInferenceGeneric(expectedList.element())
-                    && !containsUnknown(expectedList.element())) {
-                for (int i = 0; i < list.elements().size(); i++) {
-                    Type actual = typeOfAgainstExpected(
-                            list.elements().get(i), expectedList.element(), env, generics, self);
-                    requireAssignable(actual, expectedList.element(), "list element " + (i + 1));
-                }
-                return expectedList;
-            }
             if (expected instanceof Tuple) {
                 return new Tuple(list.elements().stream().map(item -> typeOf(item, env, generics, self)).toList());
             }
@@ -3029,6 +2819,42 @@ public final class TypeChecker {
         return type == Primitive.STRING || type instanceof StringLiteral;
     }
 
+    private void requireEqualityComparable(Type left, Type right) {
+        Type a = deref(left);
+        Type b = deref(right);
+        if (Types.isNumeric(a) && Types.isNumeric(b)) return;
+        if (isStringLike(a) && isStringLike(b)) return;
+        if (typesMayOverlap(a, b) || assignable(a, b) || assignable(b, a)) return;
+        throw new IllegalArgumentException(
+                "equality operands have disjoint value domains: " + left + " and " + right);
+    }
+
+    private void requireIdentityBearing(Type type, String where) {
+        Type value = deref(type);
+        if (value instanceof Union union) {
+            for (Type option : union.options()) requireIdentityBearing(option, where);
+            return;
+        }
+
+        boolean valueSemanticAggregate = value instanceof Record
+                || value instanceof Tuple
+                || value instanceof Function;
+        boolean valueSemanticNamed = value instanceof Named named
+                && (named.name().equals("Option")
+                    || named.name().equals("Result")
+                    || named.name().equals("DynamicStruct")
+                    || named.name().equals("IteratorResult"));
+
+        if (value instanceof Primitive || value instanceof StringLiteral
+                || value instanceof ClassNamespace || value instanceof Generic
+                || value == Unknown.INSTANCE
+                || valueSemanticAggregate
+                || valueSemanticNamed) {
+            throw new IllegalArgumentException(
+                    where + " must be an identity-bearing reference/handle value, but found " + value);
+        }
+    }
+
     private Record classShape(Ast.ClassDecl klass, Set<Ast.ClassDecl> stack) {
         Record cached = classShapeCache.get(klass);
         if (cached != null) return cached;
@@ -3046,14 +2872,7 @@ public final class TypeChecker {
         }
         Set<String> generics = Set.copyOf(klass.genericParameters());
         Type self = nominalClassType(klass);
-        for (Ast.FieldDecl field : klass.fields()) {
-            mergeMember(members, field.name(), classFieldType(klass, field), "class " + klass.name());
-            mergeMember(
-                    members,
-                    fieldBindingContractKey(field.name()),
-                    fieldBindingContractType(field.bindingKind()),
-                    "class " + klass.name());
-        }
+        for (Ast.FieldDecl field : klass.fields()) mergeMember(members, field.name(), classFieldType(klass, field), "class " + klass.name());
         for (Ast.MethodDecl method : klass.methods()) {
             if (method.isStatic()) continue;
             mergeMember(members,
@@ -3083,14 +2902,7 @@ public final class TypeChecker {
         Set<String> generics = Set.copyOf(klass.genericParameters());
         Type self = nominalClassType(klass);
         for (Ast.FieldDecl field : klass.fields()) {
-            if (field.visibility() == Ast.Visibility.PUBLIC) {
-                mergeMember(members, field.name(), classFieldType(klass, field), "class " + klass.name());
-                mergeMember(
-                        members,
-                        fieldBindingContractKey(field.name()),
-                        fieldBindingContractType(field.bindingKind()),
-                        "class " + klass.name());
-            }
+            if (field.visibility() == Ast.Visibility.PUBLIC) mergeMember(members, field.name(), classFieldType(klass, field), "class " + klass.name());
         }
         for (Ast.MethodDecl method : klass.methods()) {
             if (!method.isStatic() && method.visibility() == Ast.Visibility.PUBLIC) {
@@ -3129,13 +2941,6 @@ public final class TypeChecker {
                         "interface " + iface.name());
             } else if (member instanceof Ast.InterfaceFieldDecl field) {
                 mergeMember(members, field.name(), resolve(field.type(), generics, null), "interface " + iface.name());
-                if (field.bindingKind() != null) {
-                    mergeMember(
-                            members,
-                            fieldBindingContractKey(field.name()),
-                            fieldBindingContractType(field.bindingKind()),
-                            "interface " + iface.name());
-                }
             }
         }
         stack.remove(iface);
@@ -3972,9 +3777,6 @@ public final class TypeChecker {
         if (type instanceof Tuple tuple) return new Tuple(tuple.elements().stream().map(t -> substituteGenerics(t, bindings)).toList());
         if (type instanceof Union union) return Types.unionOf(union.options().stream().map(t -> substituteGenerics(t, bindings)).toList());
         if (type instanceof Named named) return new Named(named.name(), named.arguments().stream().map(t -> substituteGenerics(t, bindings)).toList());
-        if (type instanceof ModuleType module) {
-            return new ModuleType(module.name(), (Record) substituteGenerics(module.shape(), bindings));
-        }
         if (type instanceof Function fn) return new Function(
                 fn.parameters().stream().map(t -> substituteGenerics(t, bindings)).toList(),
                 substituteGenerics(fn.result(), bindings));
@@ -3986,40 +3788,6 @@ public final class TypeChecker {
         return type;
     }
 
-    /**
-     * Contextual collection typing may safely collapse a literal to its
-     * expected type only when that expectation is already concrete. Open
-     * generics must preserve the literal's actual element type so generic
-     * call inference can unify each argument position independently.
-     *
-     * ModuleType is intentionally opaque here: generic placeholders inside a
-     * module contract describe polymorphic members, not an open type variable
-     * for the surrounding collection expression.
-     */
-    private boolean containsContextualInferenceGeneric(Type type) {
-        if (type instanceof Generic) return true;
-        if (type instanceof Borrow borrow) return containsContextualInferenceGeneric(borrow.target());
-        if (type instanceof ListType list) return containsContextualInferenceGeneric(list.element());
-        if (type instanceof Tuple tuple) {
-            return tuple.elements().stream().anyMatch(this::containsContextualInferenceGeneric);
-        }
-        if (type instanceof Union union) {
-            return union.options().stream().anyMatch(this::containsContextualInferenceGeneric);
-        }
-        if (type instanceof Named named) {
-            return named.arguments().stream().anyMatch(this::containsContextualInferenceGeneric);
-        }
-        if (type instanceof Function fn) {
-            return fn.parameters().stream().anyMatch(this::containsContextualInferenceGeneric)
-                    || containsContextualInferenceGeneric(fn.result());
-        }
-        if (type instanceof Record record) {
-            return record.members().values().stream().anyMatch(this::containsContextualInferenceGeneric);
-        }
-        if (type instanceof ModuleType) return false;
-        return false;
-    }
-
     private boolean containsUnknown(Type type) {
         if (type == Unknown.INSTANCE) return true;
         if (type instanceof Borrow borrow) return containsUnknown(borrow.target());
@@ -4027,7 +3795,6 @@ public final class TypeChecker {
         if (type instanceof Tuple tuple) return tuple.elements().stream().anyMatch(this::containsUnknown);
         if (type instanceof Union union) return union.options().stream().anyMatch(this::containsUnknown);
         if (type instanceof Named named) return named.arguments().stream().anyMatch(this::containsUnknown);
-        if (type instanceof ModuleType module) return containsUnknown(module.shape());
         if (type instanceof Function fn) return fn.parameters().stream().anyMatch(this::containsUnknown)
                 || containsUnknown(fn.result());
         if (type instanceof Record record) return record.members().values().stream().anyMatch(this::containsUnknown);
@@ -4042,7 +3809,6 @@ public final class TypeChecker {
         if (type instanceof Tuple tuple) return tuple.elements().stream().anyMatch(t -> containsGenericNamed(t, names));
         if (type instanceof Union union) return union.options().stream().anyMatch(t -> containsGenericNamed(t, names));
         if (type instanceof Named named) return named.arguments().stream().anyMatch(t -> containsGenericNamed(t, names));
-        if (type instanceof ModuleType module) return containsGenericNamed(module.shape(), names);
         if (type instanceof Function fn) return fn.parameters().stream().anyMatch(t -> containsGenericNamed(t, names))
                 || containsGenericNamed(fn.result(), names);
         if (type instanceof Record record) return record.members().values().stream().anyMatch(t -> containsGenericNamed(t, names));
@@ -4107,30 +3873,6 @@ public final class TypeChecker {
             case "Array", "List" -> {
                 if (!ref.inferArguments() && ref.arguments().size() != 1) throw new IllegalArgumentException(ref.name() + " requires exactly one type argument");
                 yield new ListType(ref.arguments().isEmpty() ? Unknown.INSTANCE : resolve(ref.arguments().getFirst(), generics, self));
-            }
-            case "Module" -> {
-                if (ref.inferArguments() || ref.arguments().size() != 1) {
-                    throw new IllegalArgumentException("Module requires exactly one explicit interface contract");
-                }
-                Ast.TypeRef contractRef = ref.arguments().getFirst();
-                Ast.InterfaceDecl iface = findInterface(contractRef.name());
-                if (iface == null) {
-                    throw new IllegalArgumentException(
-                            "Module<T> requires a known interface contract; unknown '" + contractRef.name() + "'");
-                }
-                Type resolvedContract = resolve(contractRef, generics, self);
-                if (!(resolvedContract instanceof Named namedContract)) {
-                    throw new IllegalArgumentException("Module<T> contract must resolve to a named interface");
-                }
-                Record template =
-                        interfaceShape(iface, Set.copyOf(iface.genericParameters()), new LinkedHashSet<>());
-                Record expected = (Record) substituteGenerics(
-                        template,
-                        genericBindings(
-                                iface.genericParameters(),
-                                namedContract.arguments(),
-                                "interface " + iface.name()));
-                yield new ModuleType(contractRef.name(), expected);
             }
             case "DynamicStruct" -> {
                 if (ref.inferArguments() || ref.arguments().size() != 1) {
@@ -4236,8 +3978,6 @@ public final class TypeChecker {
     }
 
     private String qualifiedInterfaceName(Ast.InterfaceDecl iface) {
-        String importedName = importedInterfaceNames.get(iface);
-        if (importedName != null) return importedName;
         String owner = interfaceOwners.get(iface);
         return owner == null || owner.equals("__root__") ? iface.name() : owner + "." + iface.name();
     }
@@ -4257,60 +3997,6 @@ public final class TypeChecker {
         if (expected instanceof Union target) {
             return target.options().stream().anyMatch(option -> assignable(actual, option));
         }
-
-        // Structural/module recursion must stay inside the full checker rather
-        // than dropping to Types.isAssignable, otherwise nested nominal
-        // relationships (for example Concrete implements Contract inside a
-        // module field or callable signature) are lost.
-        if (actual instanceof ModuleType sourceModule
-                && expected instanceof ModuleType targetModule) {
-            return assignable(sourceModule.shape(), targetModule.shape());
-        }
-        if (actual instanceof ModuleType || expected instanceof ModuleType) return false;
-
-        if (actual instanceof Record sourceRecord && expected instanceof Record targetRecord) {
-            for (Map.Entry<String, Type> required : targetRecord.members().entrySet()) {
-                Type provided = sourceRecord.members().get(required.getKey());
-                if (provided == null || !assignable(provided, required.getValue())) return false;
-            }
-            return true;
-        }
-
-        if (actual instanceof Function sourceFunction && expected instanceof Function targetFunction) {
-            if (sourceFunction.parameters().size() != targetFunction.parameters().size()) return false;
-            for (int i = 0; i < sourceFunction.parameters().size(); i++) {
-                // Function parameters are contravariant.
-                if (!assignable(
-                        targetFunction.parameters().get(i),
-                        sourceFunction.parameters().get(i))) {
-                    return false;
-                }
-            }
-            return assignable(sourceFunction.result(), targetFunction.result());
-        }
-
-        if (actual instanceof ListType sourceList && expected instanceof ListType targetList) {
-            // Mutable collection element types remain invariant.
-            return assignable(sourceList.element(), targetList.element())
-                    && assignable(targetList.element(), sourceList.element());
-        }
-
-        if (actual instanceof Tuple sourceTuple && expected instanceof Tuple targetTuple) {
-            if (sourceTuple.elements().size() != targetTuple.elements().size()) return false;
-            for (int i = 0; i < sourceTuple.elements().size(); i++) {
-                if (!assignable(sourceTuple.elements().get(i), targetTuple.elements().get(i))) {
-                    return false;
-                }
-            }
-            return true;
-        }
-
-        if (actual instanceof Borrow sourceBorrow && expected instanceof Borrow targetBorrow) {
-            if (targetBorrow.mutable() && !sourceBorrow.mutable()) return false;
-            return assignable(sourceBorrow.target(), targetBorrow.target())
-                    && assignable(targetBorrow.target(), sourceBorrow.target());
-        }
-
         if (Types.isAssignable(actual, expected)) return true;
 
         if (actual instanceof Named actualNamed && expected instanceof Record targetShape) {
@@ -4319,7 +4005,7 @@ public final class TypeChecker {
             Type specializedShape = substituteGenerics(
                     publicClassShape(klass, new LinkedHashSet<>()),
                     classGenericBindings(klass, actualNamed));
-            return assignable(specializedShape, targetShape);
+            return Types.isAssignable(specializedShape, targetShape);
         }
 
         if (actual instanceof Named actualNamed && expected instanceof Named expectedNamed) {
@@ -4517,46 +4203,6 @@ public final class TypeChecker {
 
     private String methodContractKey(String name, int arity, int genericArity) {
         return CallableSelector.instance(name, arity).contractKey(genericArity);
-    }
-
-    /**
-     * Compiler-only structural member key. '
-
-
-
-    private static final class Env {
-        private final Env parent;
-        private final boolean descendantsNonLexical;
-        private final Map<String, Binding> bindings = new HashMap<>();
-        private Env(Env parent) { this(parent, parent != null && parent.descendantsNonLexical); }
-        private Env(Env parent, boolean descendantsNonLexical) {
-            this.parent = parent;
-            this.descendantsNonLexical = descendantsNonLexical;
-        }
-        private boolean descendantsNonLexical() { return descendantsNonLexical; }
-        private void define(String name, Type type, Ast.BindingKind kind) {
-            if (bindings.putIfAbsent(name, new Binding(type, kind)) != null) throw new IllegalArgumentException("duplicate binding '" + name + "'");
-        }
-        private Binding lookup(String name) {
-            Binding binding = bindings.get(name);
-            return binding != null ? binding : parent == null ? null : parent.lookup(name);
-        }
-        private void replace(String name, Type type, Ast.BindingKind kind) {
-            if (!bindings.containsKey(name)) throw new IllegalArgumentException("unknown binding '" + name + "'");
-            bindings.put(name, new Binding(type, kind));
-        }
-        private record Binding(Type type, Ast.BindingKind kind) { }
-    }
-}
- is not a legal source
-     * identifier character, so this metadata cannot collide with a user field.
-     */
-    private String fieldBindingContractKey(String name) {
-        return "$field-binding$" + name;
-    }
-
-    private Type fieldBindingContractType(Ast.BindingKind kind) {
-        return new Named("$BindingKind", List.of(new StringLiteral(kind.name())));
     }
 
 

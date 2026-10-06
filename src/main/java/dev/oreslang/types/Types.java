@@ -7,7 +7,7 @@ import java.util.Objects;
 public final class Types {
     private Types() { }
 
-    public sealed interface Type permits Primitive, Named, Borrow, ClassNamespace, ModuleType, Record, Function, ListType, Tuple, Union, Generic, StringLiteral, Unknown { }
+    public sealed interface Type permits Primitive, Named, Borrow, ClassNamespace, Record, Function, ListType, Tuple, Union, Generic, StringLiteral, Unknown { }
 
     public enum Primitive implements Type {
         INT, FLOAT, DECIMAL, COMPLEX, BOOL, STRING, VOID, NULL
@@ -22,19 +22,6 @@ public final class Types {
 
     /** Compile-time meta-value for access to static class functions. */
     public record ClassNamespace(String className) implements Type { }
-
-    /**
-     * First-class module handle. The runtime value is a module facade; the
-     * record shape is the contract-approved public data/callable surface.
-     * Keeping this distinct from Record prevents arbitrary records/classes
-     * from masquerading as Module<T>.
-     */
-    public record ModuleType(String name, Record shape) implements Type {
-        public ModuleType {
-            Objects.requireNonNull(name);
-            Objects.requireNonNull(shape);
-        }
-    }
 
     public record Record(Map<String, Type> members) implements Type {
         public Record { members = Map.copyOf(members); }
@@ -68,15 +55,6 @@ public final class Types {
         Objects.requireNonNull(to);
         if (from == Unknown.INSTANCE || to == Unknown.INSTANCE) return true;
         if (to instanceof Generic || from instanceof Generic) return true;
-
-        // Module handles are structurally compatible only with other module
-        // handles. Their labels are diagnostic/nominal metadata; conformance
-        // is defined by the required public module shape.
-        if (from instanceof ModuleType source && to instanceof ModuleType target) {
-            return isAssignable(source.shape(), target.shape());
-        }
-        if (from instanceof ModuleType || to instanceof ModuleType) return false;
-
         if (from.equals(to)) return true;
         if (from instanceof StringLiteral && to == Primitive.STRING) return true;
 

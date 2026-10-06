@@ -166,22 +166,23 @@ final class AsyncAwaitLanguageTest {
     void pendingStaticSelectResumesOnlyAfterWinningChannelRegistration() throws Exception {
         String program = """
                 define module app
-                  pub async actor fnc producer(Channel<int> output): void {
-                    writech output, 73;
+                  let Channel<int> input = Channel.new<int>(0);
+
+                  pub async actor fnc producer(): void {
+                    writech input, 73;
                     return;
                   }
 
-                  async fnc wait(Channel<int> input): int {
+                  async fnc wait(): int {
                     select {
-                      case readch input: let value;
-                      return value;
+                      case readch input: let value
+                        return value;
                     }
                   }
 
                   pub fnc main(): void {
-                    val input = Channel.new<int>(0);
-                    val producer_done = producer(input);
-                    val value = await wait(input);
+                    val producer_done = producer();
+                    val value = await wait();
                     await producer_done;
                     stdio.println(value);
                     return;

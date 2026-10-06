@@ -968,8 +968,9 @@ public final class Parser {
     }
 
     private Ast.SelectPolicy parseSelectPolicy() {
-        if (match(FIRST)
-                || (check(IDENT) && peek().lexeme().equals("first") && advance() != null)) {
+        if (match(FIRST)) return Ast.SelectPolicy.PRIORITY;
+        if (check(IDENT) && peek().lexeme().equals("first")) {
+            advance();
             return Ast.SelectPolicy.PRIORITY;
         }
         if (check(IDENT) && peek().lexeme().equals("fair")) {
@@ -1507,8 +1508,19 @@ public final class Parser {
 
     private Ast.Expr parseLogicalOr() {
         Ast.Expr expr = parseLogicalXor();
-        while (matchAdjacentPair(PIPE)) expr = new Ast.BinaryExpr("||", expr, parseLogicalXor());
+        while (!isChannelCallbackDelimiter() && matchAdjacentPair(PIPE)) {
+            expr = new Ast.BinaryExpr("||", expr, parseLogicalXor());
+        }
         return expr;
+    }
+
+    private boolean isChannelCallbackDelimiter() {
+        return current + 2 < tokens.size()
+                && tokens.get(current).type() == PIPE
+                && tokens.get(current + 1).type() == PIPE
+                && tokens.get(current + 2).type() == ARROW
+                && adjacent(tokens.get(current), tokens.get(current + 1))
+                && adjacent(tokens.get(current + 1), tokens.get(current + 2));
     }
 
     private Ast.Expr parseLogicalXor() {

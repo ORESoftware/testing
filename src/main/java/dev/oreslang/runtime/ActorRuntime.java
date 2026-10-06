@@ -949,6 +949,22 @@ public final class ActorRuntime implements AutoCloseable {
         return future;
     }
 
+    /**
+     * Start one stackless source continuation in the current actor's logical
+     * scheduler. The scheduler's executor is mailbox-backed, so every resume
+     * is serialized with ordinary actor messages and uses no second concurrency
+     * identity or carrier pool.
+     */
+    public <T> OresFuture<T> startActorTask(OresScheduler.Task<T> task) {
+        Objects.requireNonNull(task, "task");
+        ActorCell<?> cell = currentActor.get();
+        if (cell == null) {
+            throw new IllegalStateException(
+                    "source actor task requires an executing actor turn");
+        }
+        return cell.sourceScheduler().start(task);
+    }
+
     private boolean ownFuture(
             ActorCell<?> cell,
             OresFuture<?> future) {
@@ -2134,6 +2150,11 @@ public final class ActorRuntime implements AutoCloseable {
             M message,
             Invocation<M, R> invocation) {
         Objects.requireNonNull(kind, "kind");
+        if (OresScheduler.current() != null) {
+            @SuppressWarnings("unchecked")
+            R futureSurface = (R) (Object) invokeAsync(kind, message, invocation);
+            return futureSurface;
+        }
         Objects.requireNonNull(invocation, "invocation");
         requireCallerRuntimeAffinity("invoke actor callables");
         if (inActorExecution()) {
@@ -2231,6 +2252,94 @@ public final class ActorRuntime implements AutoCloseable {
                 }
             }
         }
+    }
+
+    /**
+     * Nonblocking actor-call bridge for scheduler-owned language execution.
+     * The returned Future completes from the actor mailbox continuation when a
+     * suspendable source body finishes. Host callers that require synchronous
+     * actor invocation should continue to use invoke(...).
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public <M, R> OresFuture<R> invokeAsync(
+            ActorKind kind,
+            M message,
+            Invocation<M, R> invocation) {
+        Objects.requireNonNull(kind, "kind");
+        Objects.requireNonNull(invocation, "invocation");
+        requireCallerRuntimeAffinity("invoke actor callables");
+        if (inActorExecution()) {
+            throw new IllegalStateException(
+                    "actor callable invocation from an actor turn is forbidden; "
+                            + "use mailbox-oriented actor composition");
+        }
+
+        IsolatePolicy policy = defaultSpawnPolicy();
+        OresFuture<R> completion = new OresFuture<>();
+
+        ActorRef<M> ref = spawnInternal(
+                kind,
+                policy,
+                factoryContext -> (delivered, turnContext) -> {
+                    try {
+                        Object result = invocation.run(delivered, turnContext);
+                        if (result instanceof OresFuture<?> future) {
+                            OresFuture<?> owned =
+                                    ownCurrentActorFuture((OresFuture) future);
+                            ContinuationTarget target =
+                                    captureCurrentContinuationTarget();
+
+                            enqueueOnCompletion(
+                                    (OresFuture) owned,
+                                    target,
+                                    (value, failure) -> {
+                                        try {
+                                            if (failure != null) {
+                                                completion.failFromRuntime(
+                                                        OresFuture.unwrap(failure));
+                                            } else {
+                                                R frozen = (R) freeze(value);
+                                                completion.completeFromRuntime(frozen);
+                                            }
+                                        } catch (Throwable callbackFailure) {
+                                            completion.failFromRuntime(callbackFailure);
+                                        } finally {
+                                            turnContext.self().stop();
+                                        }
+                                    });
+                            return;
+                        }
+
+                        R frozen = (R) freeze(result);
+                        completion.completeFromRuntime(frozen);
+                        turnContext.self().stop();
+                    } catch (VirtualMachineError fatal) {
+                        completion.failFromRuntime(fatal);
+                        throw fatal;
+                    } catch (ThreadDeath fatal) {
+                        completion.failFromRuntime(fatal);
+                        throw fatal;
+                    } catch (LinkageError fatal) {
+                        completion.failFromRuntime(fatal);
+                        throw fatal;
+                    } catch (Throwable failure) {
+                        completion.failFromRuntime(failure);
+                        turnContext.self().stop();
+                    }
+                },
+                true);
+
+        try {
+            send(ref, message);
+        } catch (Throwable failure) {
+            completion.failFromRuntime(failure);
+            try {
+                if (ref.isAlive()) stop(ref);
+            } catch (RuntimeException cleanup) {
+                failure.addSuppressed(cleanup);
+            }
+        }
+        return completion;
     }
 
     private void reserveActorSlot() {
@@ -4015,6 +4124,7 @@ public final class ActorRuntime implements AutoCloseable {
         private final Object executionDomain = new Object();
         private int activeTurns;
         private boolean carrierActive;
+        private OresScheduler sourceScheduler;
         private boolean finalized;
         private long turnStartedWallNanos;
         private long turnStartedCpuNanos = -1L;
@@ -4074,6 +4184,27 @@ public final class ActorRuntime implements AutoCloseable {
             }
         }
 
+        private OresScheduler sourceScheduler() {
+            synchronized (lifecycleLock) {
+                if (sourceScheduler != null) return sourceScheduler;
+
+                java.util.concurrent.Executor mailboxExecutor = command -> {
+                    if (!enqueueContinuation(ref.id(), command)) {
+                        throw new RejectedExecutionException(
+                                "actor " + ref.id()
+                                        + " cannot accept a source continuation");
+                    }
+                };
+
+                sourceScheduler = OresScheduler.runtimeOwned(
+                        "ores-actor-" + ref.id(),
+                        1,
+                        mailboxExecutor,
+                        Runnable::run);
+                return sourceScheduler;
+            }
+        }
+
         private boolean beginTurn() {
             synchronized (lifecycleLock) {
                 if (stopped.get() || forceKillFenced || finalized) return false;
@@ -4103,6 +4234,16 @@ public final class ActorRuntime implements AutoCloseable {
                     || carrierActive
                     || !children.isEmpty()) return;
             finalized = true;
+            OresScheduler scheduler = sourceScheduler;
+            sourceScheduler = null;
+            if (scheduler != null) {
+                try {
+                    scheduler.close();
+                } catch (RuntimeException ignored) {
+                    // Actor teardown remains authoritative; source scheduler
+                    // cancellation is best-effort after the actor has finalized.
+                }
+            }
             drainMailboxReservations();
             if (memorySlice != null) memorySlice.close();
             try {

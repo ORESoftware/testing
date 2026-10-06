@@ -19,14 +19,14 @@ final class ChannelSelectSyntaxTest {
                 fnc blocking(
                     Channel<string> incoming,
                     Channel<string> payload,
-                    Channel<bool> done
+                    Channel<bool> finished
                 ): void {
                   select {
                   case readch incoming: let msg
                     stdio.println(msg);
                   case readch payload: const body
                     stdio.println(body);
-                  case readch done:
+                  case readch finished:
                     return;
                   }
                   return;
@@ -42,7 +42,7 @@ final class ChannelSelectSyntaxTest {
                     stdio.println(msg);
                   case readch payload: const body
                     stdio.println(body);
-                  case readch done: const signal
+                  case readch finished: const signal
                     return;
                   }
                   stdio.println("continued immediately");
@@ -142,7 +142,7 @@ final class ChannelSelectSyntaxTest {
 
                   try {
                     stdio.println("ordinary try still works");
-                  } catch err {
+                  } catch (err) {
                     stdio.println(err);
                   }
                   return;

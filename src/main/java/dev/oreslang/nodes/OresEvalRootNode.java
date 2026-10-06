@@ -319,7 +319,16 @@ public final class OresEvalRootNode extends RootNode {
                 for (Ast.ModuleDecl module : program.modules()) {
                     for (Ast.Decl decl : module.declarations()) {
                         if (decl instanceof Ast.FunctionDecl fn && fn.name().equals("init")) {
-                            last = invoke(functionBodyInvocation(fn, List.of()));
+                            Object initialized =
+                                    invoke(functionBodyInvocation(fn, List.of()));
+                            if (initialized instanceof OresFuture<?> future) {
+                                if (OresScheduler.current() != null) {
+                                    throw new IllegalStateException(
+                                            "module init cannot suspend from inside a scheduler-owned startup turn");
+                                }
+                                initialized = future.join();
+                            }
+                            last = initialized;
                         }
                     }
                 }
@@ -429,25 +438,2990 @@ public final class OresEvalRootNode extends RootNode {
             return invoke(functionInvocation(fn, args));
         }
 
+
+        @FunctionalInterface
+        private interface SourceValueCont {
+            void accept(SourceTask task, Object value, Throwable failure);
+        }
+
+        @FunctionalInterface
+        private interface SourceFlowCont {
+            void accept(SourceTask task, SourceFlow flow);
+        }
+
+        private enum SourceFlowKind {
+            NORMAL, RETURN, BREAK, CONTINUE, THROW
+        }
+
+        private record SourceFlow(
+                SourceFlowKind kind,
+                Object value,
+                Throwable failure) {
+            private static SourceFlow normal() {
+                return new SourceFlow(SourceFlowKind.NORMAL, null, null);
+            }
+
+            private static SourceFlow returning(Object value) {
+                return new SourceFlow(SourceFlowKind.RETURN, value, null);
+            }
+
+            private static SourceFlow breaking() {
+                return new SourceFlow(SourceFlowKind.BREAK, null, null);
+            }
+
+            private static SourceFlow continuing() {
+                return new SourceFlow(SourceFlowKind.CONTINUE, null, null);
+            }
+
+            private static SourceFlow throwing(Throwable failure) {
+                return new SourceFlow(
+                        SourceFlowKind.THROW,
+                        null,
+                        Objects.requireNonNull(failure, "failure"));
+            }
+        }
+
+        /**
+         * A heap-owned source execution frame. It contains no suspended Java
+         * interpreter stack: when a source operation becomes pending, the
+         * current continuation is stored here and OresScheduler.Task returns
+         * Await to unwind the carrier completely.
+         */
+        private final class SourceTask implements OresScheduler.Task<Object> {
+            private final Ast.FunctionDecl function;
+            private final Ast.MethodDecl method;
+            private final OresObject receiver;
+            private final List<Ast.Stmt> blockBody;
+            private final List<?> arguments;
+            private Env initialBlockEnv;
+
+            private SourceValueCont awaitingContinuation;
+            private OresScheduler.Step<Object> nextStep;
+
+            private SourceTask(
+                    Ast.FunctionDecl function,
+                    List<?> arguments) {
+                this.function = Objects.requireNonNull(function, "function");
+                this.method = null;
+                this.receiver = null;
+                this.blockBody = null;
+                this.arguments = List.copyOf(arguments);
+            }
+
+            private SourceTask(
+                    Ast.MethodDecl method,
+                    OresObject receiver,
+                    List<?> arguments) {
+                this.function = null;
+                this.method = Objects.requireNonNull(method, "method");
+                this.receiver = receiver;
+                this.blockBody = null;
+                this.arguments = List.copyOf(arguments);
+            }
+
+            private SourceTask(List<Ast.Stmt> blockBody) {
+                this.function = null;
+                this.method = null;
+                this.receiver = null;
+                this.blockBody = List.copyOf(
+                        Objects.requireNonNull(blockBody, "blockBody"));
+                this.arguments = List.of();
+            }
+
+            @Override
+            public OresScheduler.Step<Object> resume(
+                    OresScheduler.Resume resume)
+                    throws Exception {
+                nextStep = null;
+
+                if (resume.initial()) {
+                    Env params;
+                    if (blockBody != null) {
+                        params = initialBlockEnv != null
+                                ? initialBlockEnv
+                                : new Env(null);
+                    } else {
+                        params = new Env(
+                                null,
+                                function != null && function.nonLexical(),
+                                function != null
+                                        ? null
+                                        : declaringClass(method));
+
+                        if (receiver != null) {
+                            params.define(
+                                    "self",
+                                    receiver,
+                                    Ast.BindingKind.VAL);
+                        }
+
+                        List<Ast.Param> parameters =
+                                function != null
+                                        ? function.parameters()
+                                        : method.parameters();
+                        if (parameters.size() != arguments.size()) {
+                            throw new IllegalArgumentException(
+                                    "source task argument arity mismatch");
+                        }
+
+                        for (int i = 0; i < parameters.size(); i++) {
+                            Ast.Param param = parameters.get(i);
+                            params.define(
+                                    param.name(),
+                                    arguments.get(i),
+                                    param.mutable()
+                                            ? Ast.BindingKind.LET
+                                            : Ast.BindingKind.VAL);
+                        }
+                    }
+
+                    List<Ast.Stmt> body =
+                            blockBody != null
+                                    ? blockBody
+                                    : function != null
+                                            ? function.body()
+                                            : method.body();
+
+                    runBlock(
+                            this,
+                            body,
+                            params,
+                            this::finishSourceFlow);
+                } else {
+                    SourceValueCont continuation = awaitingContinuation;
+                    awaitingContinuation = null;
+                    if (continuation == null) {
+                        throw new IllegalStateException(
+                                "source task resumed without a pending source continuation");
+                    }
+                    continuation.accept(
+                            this,
+                            resume.value(),
+                            resume.failure());
+                }
+
+                if (nextStep == null) {
+                    throw new IllegalStateException(
+                            "source continuation produced neither Await nor Done");
+                }
+
+                OresScheduler.Step<Object> result = nextStep;
+                nextStep = null;
+                return result;
+            }
+
+            private void suspend(
+                    OresFuture<?> future,
+                    SourceValueCont continuation) {
+                Objects.requireNonNull(future, "future");
+                Objects.requireNonNull(continuation, "continuation");
+                if (nextStep != null) {
+                    throw new IllegalStateException(
+                            "source continuation attempted two terminal steps in one turn");
+                }
+                awaitingContinuation = continuation;
+                nextStep = OresScheduler.await(future);
+            }
+
+            private void done(Object value) {
+                if (nextStep != null) {
+                    throw new IllegalStateException(
+                            "source continuation attempted two terminal steps in one turn");
+                }
+                nextStep = OresScheduler.done(value);
+            }
+
+            private void finishSourceFlow(
+                    SourceTask task,
+                    SourceFlow flow) {
+                if (blockBody != null) {
+                    switch (flow.kind()) {
+                        case NORMAL -> done(null);
+                        case RETURN -> {
+                            if (flow.value() != null) {
+                                throw new IllegalStateException(
+                                        "detached source continuation cannot return a value");
+                            }
+                            done(null);
+                        }
+                        case THROW -> throw sourceFailure(flow.failure());
+                        case BREAK, CONTINUE ->
+                                throw new IllegalStateException(
+                                        "loop control crossed a source continuation boundary");
+                    }
+                    return;
+                }
+
+                switch (flow.kind()) {
+                    case NORMAL -> done(shapeSourceReturn(null, null));
+                    case RETURN -> done(shapeSourceReturn(flow.value(), null));
+                    case THROW -> throw sourceFailure(flow.failure());
+                    case BREAK, CONTINUE ->
+                            throw new IllegalStateException(
+                                    "loop control crossed a source function boundary");
+                }
+            }
+
+            private Object shapeSourceReturn(
+                    Object value,
+                    Throwable ignored) {
+                Ast.TypeRef returnType =
+                        function != null ? function.returnType() : method.returnType();
+                String label =
+                        function != null
+                                ? "function " + function.name()
+                                : "method " + method.name();
+                return shapeReturnedValue(returnType, value, label);
+            }
+        }
+
+        private RuntimeException sourceFailure(Throwable failure) {
+            Throwable unwrapped = OresFuture.unwrap(
+                    Objects.requireNonNull(failure, "failure"));
+            if (unwrapped instanceof RuntimeException runtime) {
+                return runtime;
+            }
+            if (unwrapped instanceof Error error) {
+                throw error;
+            }
+            return new RuntimeException(unwrapped);
+        }
+
+        private OresFuture<Object> startSourceFunctionTask(
+                Ast.FunctionDecl function,
+                List<?> arguments) {
+            SourceTask task = new SourceTask(function, arguments);
+            OresFuture<Object> future;
+            if (ActorRuntime.inActorExecution()) {
+                future = context.actors().startActorTask(task);
+                context.actors().ownCurrentActorFuture(future);
+            } else {
+                OresScheduler current = OresScheduler.current();
+                future = (current != null
+                        ? current
+                        : context.vm().rootScheduler()).start(task);
+            }
+            return future;
+        }
+
+        private OresFuture<Object> startSourceBlockTask(
+                List<Ast.Stmt> body,
+                Env env) {
+            SourceTask task = new SourceTask(body);
+            if (!ActorRuntime.inActorExecution()) {
+                throw new IllegalStateException(
+                        "detached source block task requires actor execution");
+            }
+            task.initialBlockEnv = env.snapshot();
+            OresFuture<Object> future = context.actors().startActorTask(task);
+            context.actors().ownCurrentActorFuture(future);
+            return future;
+        }
+
+        private OresFuture<Object> startSourceMethodTask(
+                Ast.MethodDecl method,
+                OresObject receiver,
+                List<?> arguments) {
+            SourceTask task = new SourceTask(method, receiver, arguments);
+            OresFuture<Object> future;
+            if (ActorRuntime.inActorExecution()) {
+                future = context.actors().startActorTask(task);
+                context.actors().ownCurrentActorFuture(future);
+            } else {
+                OresScheduler current = OresScheduler.current();
+                future = (current != null
+                        ? current
+                        : context.vm().rootScheduler()).start(task);
+            }
+            return future;
+        }
+
+        private boolean functionContainsPotentialSuspension(
+                Ast.FunctionDecl function) {
+            return functionContainsPotentialSuspension(
+                    function,
+                    java.util.Collections.newSetFromMap(
+                            new IdentityHashMap<>()));
+        }
+
+        private boolean functionContainsPotentialSuspension(
+                Ast.FunctionDecl function,
+                Set<Ast.FunctionDecl> seen) {
+            if (!seen.add(function)) return false;
+            for (Ast.Stmt stmt : function.body()) {
+                if (statementContainsPotentialSuspension(stmt, seen)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private boolean statementContainsPotentialSuspension(
+                Ast.Stmt stmt,
+                Set<Ast.FunctionDecl> seen) {
+            if (stmt instanceof Ast.SelectStmt select) {
+                return select.mode() != Ast.WaitMode.IMMEDIATE
+                        || select.arms().stream()
+                                .anyMatch(arm ->
+                                        arm.body().stream().anyMatch(
+                                                nested -> statementContainsPotentialSuspension(
+                                                        nested,
+                                                        seen)));
+            }
+            if (stmt instanceof Ast.BindingStmt binding) {
+                return expressionContainsPotentialSuspension(
+                        binding.initializer(), seen);
+            }
+            if (stmt instanceof Ast.DestructureStmt destructure) {
+                return expressionContainsPotentialSuspension(
+                        destructure.initializer(), seen);
+            }
+            if (stmt instanceof Ast.ReturnStmt ret) {
+                return ret.value() != null
+                        && expressionContainsPotentialSuspension(
+                                ret.value(), seen);
+            }
+            if (stmt instanceof Ast.ExprStmt expr) {
+                return expressionContainsPotentialSuspension(
+                        expr.expression(), seen);
+            }
+            if (stmt instanceof Ast.DeferStmt defer) {
+                return expressionContainsPotentialSuspension(
+                        defer.expression(), seen);
+            }
+            if (stmt instanceof Ast.BlockStmt block) {
+                return block.body().stream().anyMatch(
+                        nested -> statementContainsPotentialSuspension(nested, seen));
+            }
+            if (stmt instanceof Ast.IfStmt conditional) {
+                return conditional.branches().stream().anyMatch(
+                                branch ->
+                                        expressionContainsPotentialSuspension(
+                                                branch.condition(), seen)
+                                                || branch.body().stream().anyMatch(
+                                                        nested ->
+                                                                statementContainsPotentialSuspension(
+                                                                        nested,
+                                                                        seen)))
+                        || conditional.elseBody().stream().anyMatch(
+                                nested ->
+                                        statementContainsPotentialSuspension(nested, seen));
+            }
+            if (stmt instanceof Ast.MatchStmt matched) {
+                if (expressionContainsPotentialSuspension(
+                        matched.subject(), seen)) return true;
+                return matched.arms().stream().anyMatch(
+                        arm ->
+                                (arm.guard() != null
+                                        && expressionContainsPotentialSuspension(
+                                                arm.guard(), seen))
+                                        || arm.body().stream().anyMatch(
+                                                nested ->
+                                                        statementContainsPotentialSuspension(
+                                                                nested,
+                                                                seen)));
+            }
+            if (stmt instanceof Ast.SwitchStmt switched) {
+                if (expressionContainsPotentialSuspension(
+                        switched.subject(), seen)) return true;
+                return switched.cases().stream().anyMatch(
+                        arm ->
+                                arm.body().stream().anyMatch(
+                                        nested ->
+                                                statementContainsPotentialSuspension(
+                                                        nested, seen)))
+                        || switched.defaultBody().stream().anyMatch(
+                                nested ->
+                                        statementContainsPotentialSuspension(
+                                                nested, seen));
+            }
+            if (stmt instanceof Ast.TryStmt attempted) {
+                return attempted.body().stream().anyMatch(
+                                nested ->
+                                        statementContainsPotentialSuspension(nested, seen))
+                        || attempted.catchBody().stream().anyMatch(
+                                nested ->
+                                        statementContainsPotentialSuspension(nested, seen))
+                        || attempted.finallyBody().stream().anyMatch(
+                                nested ->
+                                        statementContainsPotentialSuspension(nested, seen));
+            }
+            if (stmt instanceof Ast.ForOfStmt loop) {
+                return expressionContainsPotentialSuspension(loop.iterable(), seen)
+                        || loop.body().stream().anyMatch(
+                                nested ->
+                                        statementContainsPotentialSuspension(nested, seen));
+            }
+            if (stmt instanceof Ast.ForOfDestructureStmt loop) {
+                return expressionContainsPotentialSuspension(loop.iterable(), seen)
+                        || loop.body().stream().anyMatch(
+                                nested ->
+                                        statementContainsPotentialSuspension(nested, seen));
+            }
+            if (stmt instanceof Ast.ForStmt loop) {
+                return (loop.initializer() != null
+                                && statementContainsPotentialSuspension(
+                                        loop.initializer(), seen))
+                        || (loop.condition() != null
+                                && expressionContainsPotentialSuspension(
+                                        loop.condition(), seen))
+                        || (loop.update() != null
+                                && expressionContainsPotentialSuspension(
+                                        loop.update(), seen))
+                        || loop.body().stream().anyMatch(
+                                nested ->
+                                        statementContainsPotentialSuspension(
+                                                nested, seen));
+            }
+            if (stmt instanceof Ast.LoopStmt loop) {
+                return loop.body().stream().anyMatch(
+                        nested ->
+                                statementContainsPotentialSuspension(nested, seen));
+            }
+            return false;
+        }
+
+        private boolean expressionContainsPotentialSuspension(
+                Ast.Expr expr,
+                Set<Ast.FunctionDecl> seen) {
+            if (expr == null) return false;
+            if (expr instanceof Ast.AwaitExpr
+                    || expr instanceof Ast.ChannelOpExpr channel
+                        && channel.mode() != Ast.WaitMode.IMMEDIATE
+                    || expr instanceof Ast.DynamicSelectExpr selected
+                        && selected.mode() != Ast.WaitMode.IMMEDIATE) {
+                return true;
+            }
+            if (expr instanceof Ast.CallExpr call) {
+                if (call.callee() instanceof Ast.NameExpr name
+                        && !functionNameBoundLocally(name.name())) {
+                    Ast.FunctionDecl target = findFunction(name.name());
+                    if (target != null) {
+                        return target.async()
+                                || target.actorKind() != Ast.ActorKind.NONE
+                                || (!target.async()
+                                        && functionContainsPotentialSuspension(
+                                                target,
+                                                seen));
+                    }
+                }
+                return false;
+            }
+            if (expr instanceof Ast.UnaryExpr unary) {
+                return expressionContainsPotentialSuspension(
+                        unary.operand(), seen);
+            }
+            if (expr instanceof Ast.BinaryExpr binary) {
+                return expressionContainsPotentialSuspension(
+                                binary.left(), seen)
+                        || expressionContainsPotentialSuspension(
+                                binary.right(), seen);
+            }
+            if (expr instanceof Ast.AssignExpr assignment) {
+                return expressionContainsPotentialSuspension(
+                                assignment.target(), seen)
+                        || expressionContainsPotentialSuspension(
+                                assignment.value(), seen);
+            }
+            if (expr instanceof Ast.ConditionalExpr conditional) {
+                return expressionContainsPotentialSuspension(
+                                conditional.condition(), seen)
+                        || expressionContainsPotentialSuspension(
+                                conditional.whenTrue(), seen)
+                        || expressionContainsPotentialSuspension(
+                                conditional.whenFalse(), seen);
+            }
+            if (expr instanceof Ast.TypeTestExpr test) {
+                return expressionContainsPotentialSuspension(
+                        test.value(), seen);
+            }
+            if (expr instanceof Ast.PatternTestExpr test) {
+                return expressionContainsPotentialSuspension(
+                        test.value(), seen);
+            }
+            if (expr instanceof Ast.CastExpr cast) {
+                return expressionContainsPotentialSuspension(
+                        cast.value(), seen);
+            }
+            if (expr instanceof Ast.MemberExpr member) {
+                return expressionContainsPotentialSuspension(
+                        member.receiver(), seen);
+            }
+            if (expr instanceof Ast.IndexExpr index) {
+                return expressionContainsPotentialSuspension(
+                                index.receiver(), seen)
+                        || expressionContainsPotentialSuspension(
+                                index.index(), seen);
+            }
+            if (expr instanceof Ast.NewExpr created) {
+                return created.arguments().stream().anyMatch(
+                        arg -> expressionContainsPotentialSuspension(
+                                arg, seen));
+            }
+            if (expr instanceof Ast.ListExpr list) {
+                return list.elements().stream().anyMatch(
+                        item -> expressionContainsPotentialSuspension(item, seen));
+            }
+            if (expr instanceof Ast.TupleExpr tuple) {
+                return tuple.elements().stream().anyMatch(
+                        item -> expressionContainsPotentialSuspension(item, seen));
+            }
+            if (expr instanceof Ast.ObjectExpr object) {
+                return object.fields().stream().anyMatch(
+                        field ->
+                                (field.isDynamic()
+                                        && expressionContainsPotentialSuspension(
+                                                field.dynamicName(), seen))
+                                        || expressionContainsPotentialSuspension(
+                                                field.value(), seen));
+            }
+            return false;
+        }
+
+        private boolean functionNameBoundLocally(String name) {
+            return false;
+        }
+
+        private void runBlock(
+                SourceTask task,
+                List<Ast.Stmt> statements,
+                Env parent,
+                SourceFlowCont continuation) {
+            Env env = new Env(parent);
+            ArrayDeque<Ast.Expr> defers = new ArrayDeque<>();
+            runStatements(
+                    task,
+                    statements,
+                    env,
+                    defers,
+                    0,
+                    flow -> finishBlock(task, env, defers, flow, continuation));
+        }
+
+        private void runStatements(
+                SourceTask task,
+                List<Ast.Stmt> statements,
+                Env env,
+                ArrayDeque<Ast.Expr> defers,
+                int index,
+                SourceFlowCont continuation) {
+            if (index >= statements.size()) {
+                finishBlock(
+                        task,
+                        env,
+                        defers,
+                        SourceFlow.normal(),
+                        continuation);
+                return;
+            }
+
+            Ast.Stmt stmt = statements.get(index);
+            if (!statementContainsPotentialSuspension(
+                    stmt,
+                    java.util.Collections.newSetFromMap(
+                            new IdentityHashMap<>()))) {
+                try {
+                    executeStatement(stmt, env, defers, false);
+                    runStatements(
+                            task,
+                            statements,
+                            env,
+                            defers,
+                            index + 1,
+                            continuation);
+                    return;
+                } catch (ReturnSignal returned) {
+                    finishBlock(
+                            task,
+                            env,
+                            defers,
+                            SourceFlow.returning(returned.value),
+                            continuation);
+                    return;
+                } catch (BreakSignal ignored) {
+                    finishBlock(
+                            task,
+                            env,
+                            defers,
+                            SourceFlow.breaking(),
+                            continuation);
+                    return;
+                } catch (ContinueSignal ignored) {
+                    finishBlock(
+                            task,
+                            env,
+                            defers,
+                            SourceFlow.continuing(),
+                            continuation);
+                    return;
+                } catch (RuntimeException | Error failure) {
+                    finishBlock(
+                            task,
+                            env,
+                            defers,
+                            SourceFlow.throwing(failure),
+                            continuation);
+                    return;
+                }
+            }
+
+            runSuspendableStatement(
+                    task,
+                    stmt,
+                    env,
+                    defers,
+                    flow -> {
+                        if (flow.kind() == SourceFlowKind.NORMAL) {
+                            runStatements(
+                                    task,
+                                    statements,
+                                    env,
+                                    defers,
+                                    index + 1,
+                                    continuation);
+                        } else {
+                            finishBlock(
+                                    task,
+                                    env,
+                                    defers,
+                                    flow,
+                                    continuation);
+                        }
+                    });
+        }
+
+        private void finishBlock(
+                SourceTask task,
+                Env env,
+                ArrayDeque<Ast.Expr> defers,
+                SourceFlow initialFlow,
+                SourceFlowCont continuation) {
+            if (defers.isEmpty()) {
+                try {
+                    env.releaseMutexGuards(
+                            initialFlow.kind() != SourceFlowKind.NORMAL);
+                    continuation.accept(task, initialFlow);
+                } catch (RuntimeException | Error failure) {
+                    continuation.accept(
+                            task,
+                            SourceFlow.throwing(failure));
+                }
+                return;
+            }
+
+            runOneDefer(
+                    task,
+                    env,
+                    defers,
+                    initialFlow,
+                    continuation);
+        }
+
+        private void runOneDefer(
+                SourceTask task,
+                Env env,
+                ArrayDeque<Ast.Expr> defers,
+                SourceFlow currentFlow,
+                SourceFlowCont continuation) {
+            Ast.Expr defer = defers.pollFirst();
+            if (defer == null) {
+                try {
+                    env.releaseMutexGuards(
+                            currentFlow.kind() != SourceFlowKind.NORMAL);
+                    continuation.accept(task, currentFlow);
+                } catch (RuntimeException | Error failure) {
+                    continuation.accept(
+                            task,
+                            SourceFlow.throwing(failure));
+                }
+                return;
+            }
+
+            evalSuspendableExpr(
+                    task,
+                    defer,
+                    env,
+                    (ignored, ignoredValue, failure) -> {
+                        if (failure != null) {
+                            if (currentFlow.failure() != null) {
+                                failure.addSuppressed(currentFlow.failure());
+                            }
+                            runOneDefer(
+                                    task,
+                                    env,
+                                    defers,
+                                    SourceFlow.throwing(failure),
+                                    continuation);
+                        } else {
+                            runOneDefer(
+                                    task,
+                                    env,
+                                    defers,
+                                    currentFlow,
+                                    continuation);
+                        }
+                    });
+        }
+
+        private void runSuspendableStatement(
+                SourceTask task,
+                Ast.Stmt stmt,
+                Env env,
+                ArrayDeque<Ast.Expr> defers,
+                SourceFlowCont continuation) {
+            try {
+                if (stmt instanceof Ast.BindingStmt binding) {
+                    evalSuspendableExpr(
+                            task,
+                            binding.initializer(),
+                            env,
+                            (t, value, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(
+                                            t,
+                                            SourceFlow.throwing(failure));
+                                    return;
+                                }
+                                env.define(binding.name(), value, binding.kind());
+                                continuation.accept(t, SourceFlow.normal());
+                            });
+                    return;
+                }
+
+                if (stmt instanceof Ast.DestructureStmt destructure) {
+                    evalSuspendableExpr(
+                            task,
+                            destructure.initializer(),
+                            env,
+                            (t, value, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(
+                                            t,
+                                            SourceFlow.throwing(failure));
+                                    return;
+                                }
+                                try {
+                                    if (destructure.kind()
+                                            == Ast.DestructureKind.SEQUENCE) {
+                                        List<?> items = asSequence(value);
+                                        if (items.size()
+                                                != destructure.bindings().size()) {
+                                            throw new IllegalArgumentException(
+                                                    "destructure arity mismatch");
+                                        }
+                                        for (int i = 0; i < items.size(); i++) {
+                                            Ast.DestructureBinding binding =
+                                                    destructure.bindings().get(i);
+                                            if (!binding.isDiscard()) {
+                                                env.define(
+                                                        binding.name(),
+                                                        items.get(i),
+                                                        binding.kind());
+                                            }
+                                        }
+                                    } else {
+                                        for (Ast.DestructureBinding binding :
+                                                destructure.bindings()) {
+                                            if (!binding.isDiscard()) {
+                                                env.define(
+                                                        binding.name(),
+                                                        destructureMember(
+                                                                value,
+                                                                binding.name(),
+                                                                env),
+                                                        binding.kind());
+                                            }
+                                        }
+                                    }
+                                    continuation.accept(
+                                            t,
+                                            SourceFlow.normal());
+                                } catch (RuntimeException | Error failure2) {
+                                    continuation.accept(
+                                            t,
+                                            SourceFlow.throwing(failure2));
+                                }
+                            });
+                    return;
+                }
+
+                if (stmt instanceof Ast.ReturnStmt returned) {
+                    if (returned.value() == null) {
+                        continuation.accept(task, SourceFlow.returning(null));
+                    } else {
+                        evalSuspendableExpr(
+                                task,
+                                returned.value(),
+                                env,
+                                (t, value, failure) ->
+                                        continuation.accept(
+                                                t,
+                                                failure == null
+                                                        ? SourceFlow.returning(value)
+                                                        : SourceFlow.throwing(failure)));
+                    }
+                    return;
+                }
+
+                if (stmt instanceof Ast.ExprStmt expr) {
+                    evalSuspendableExpr(
+                            task,
+                            expr.expression(),
+                            env,
+                            (t, ignored, failure) ->
+                                    continuation.accept(
+                                            t,
+                                            failure == null
+                                                    ? SourceFlow.normal()
+                                                    : SourceFlow.throwing(failure)));
+                    return;
+                }
+
+                if (stmt instanceof Ast.DeferStmt defer) {
+                    defers.push(defer.expression());
+                    continuation.accept(task, SourceFlow.normal());
+                    return;
+                }
+
+                if (stmt instanceof Ast.BlockStmt block) {
+                    runBlock(
+                            task,
+                            block.body(),
+                            env,
+                            continuation);
+                    return;
+                }
+
+                if (stmt instanceof Ast.BreakStmt) {
+                    continuation.accept(task, SourceFlow.breaking());
+                    return;
+                }
+
+                if (stmt instanceof Ast.ContinueStmt) {
+                    continuation.accept(task, SourceFlow.continuing());
+                    return;
+                }
+
+                if (stmt instanceof Ast.IfStmt conditional) {
+                    runIfBranches(
+                            task,
+                            conditional,
+                            env,
+                            0,
+                            continuation);
+                    return;
+                }
+
+                if (stmt instanceof Ast.MatchStmt matched) {
+                    evalSuspendableExpr(
+                            task,
+                            matched.subject(),
+                            env,
+                            (t, subject, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(
+                                            t,
+                                            SourceFlow.throwing(failure));
+                                    return;
+                                }
+                                runMatchArms(
+                                        t,
+                                        matched,
+                                        subject,
+                                        env,
+                                        0,
+                                        null,
+                                        continuation);
+                            });
+                    return;
+                }
+
+                if (stmt instanceof Ast.SwitchStmt switched) {
+                    evalSuspendableExpr(
+                            task,
+                            switched.subject(),
+                            env,
+                            (t, subject, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(
+                                            t,
+                                            SourceFlow.throwing(failure));
+                                    return;
+                                }
+                                Ast.SelectArm selected = null;
+                                for (Ast.SwitchCase arm : switched.cases()) {
+                                    boolean matchedCase = false;
+                                    for (Ast.Expr constant : arm.constants()) {
+                                        if (Objects.equals(subject, eval(constant, env))) {
+                                            matchedCase = true;
+                                            break;
+                                        }
+                                    }
+                                    if (matchedCase) {
+                                        runBlock(
+                                                t,
+                                                arm.body(),
+                                                env,
+                                                continuation);
+                                        return;
+                                    }
+                                }
+                                runBlock(
+                                        t,
+                                        switched.defaultBody(),
+                                        env,
+                                        continuation);
+                            });
+                    return;
+                }
+
+                if (stmt instanceof Ast.TryStmt attempted) {
+                    runBlock(
+                            task,
+                            attempted.body(),
+                            env,
+                            (t, flow) -> {
+                                if (flow.kind() == SourceFlowKind.THROW) {
+                                    Env caught = new Env(env);
+                                    caught.define(
+                                            attempted.errorName(),
+                                            flow.failure(),
+                                            Ast.BindingKind.VAL);
+                                    runBlock(
+                                            t,
+                                            attempted.catchBody(),
+                                            caught,
+                                            (t2, catchFlow) ->
+                                                    runBlock(
+                                                            t2,
+                                                            attempted.finallyBody(),
+                                                            env,
+                                                            (t3, finallyFlow) ->
+                                                                    continuation.accept(
+                                                                            t3,
+                                                                            finallyFlow.kind()
+                                                                                            != SourceFlowKind.NORMAL
+                                                                                    ? finallyFlow
+                                                                                    : catchFlow)));
+                                } else {
+                                    runBlock(
+                                            t,
+                                            attempted.finallyBody(),
+                                            env,
+                                            (t2, finallyFlow) ->
+                                                    continuation.accept(
+                                                            t2,
+                                                            finallyFlow.kind()
+                                                                            != SourceFlowKind.NORMAL
+                                                                    ? finallyFlow
+                                                                    : flow));
+                                }
+                            });
+                    return;
+                }
+
+                if (stmt instanceof Ast.SelectStmt select) {
+                    runSelectSuspendable(
+                            task,
+                            select,
+                            env,
+                            continuation);
+                    return;
+                }
+
+                if (stmt instanceof Ast.ForStmt loop) {
+                    runForSuspendable(
+                            task,
+                            loop,
+                            env,
+                            continuation);
+                    return;
+                }
+
+                if (stmt instanceof Ast.LoopStmt loop) {
+                    runLoopSuspendable(
+                            task,
+                            loop,
+                            env,
+                            continuation);
+                    return;
+                }
+
+                if (stmt instanceof Ast.ForOfStmt loop) {
+                    evalSuspendableExpr(
+                            task,
+                            loop.iterable(),
+                            env,
+                            (t, iterable, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(
+                                            t,
+                                            SourceFlow.throwing(failure));
+                                    return;
+                                }
+                                runForOfIteration(
+                                        t,
+                                        loop,
+                                        env,
+                                        iterableValues(iterable, env),
+                                        0,
+                                        continuation);
+                            });
+                    return;
+                }
+
+                if (stmt instanceof Ast.ForOfDestructureStmt loop) {
+                    evalSuspendableExpr(
+                            task,
+                            loop.iterable(),
+                            env,
+                            (t, iterable, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(
+                                            t,
+                                            SourceFlow.throwing(failure));
+                                    return;
+                                }
+                                runForOfDestructureIteration(
+                                        t,
+                                        loop,
+                                        env,
+                                        iterableValues(iterable, env),
+                                        0,
+                                        continuation);
+                            });
+                    return;
+                }
+
+                throw new IllegalArgumentException(
+                        "unsupported suspendable statement "
+                                + stmt.getClass().getName());
+            } catch (RuntimeException | Error failure) {
+                continuation.accept(
+                        task,
+                        SourceFlow.throwing(failure));
+            }
+        }
+
+        private void runIfBranches(
+                SourceTask task,
+                Ast.IfStmt conditional,
+                Env env,
+                int index,
+                SourceFlowCont continuation) {
+            if (index >= conditional.branches().size()) {
+                runBlock(
+                        task,
+                        conditional.elseBody(),
+                        env,
+                        continuation);
+                return;
+            }
+
+            Ast.IfBranch branch = conditional.branches().get(index);
+            evalSuspendableCondition(
+                    task,
+                    branch.condition(),
+                    env,
+                    (t, condition) -> {
+                        if (condition.matched()) {
+                            Env branchEnv = new Env(env);
+                            condition.bindings().forEach(
+                                    (name, value) ->
+                                            branchEnv.define(
+                                                    name,
+                                                    value,
+                                                    Ast.BindingKind.VAL));
+                            runBlock(
+                                    t,
+                                    branch.body(),
+                                    branchEnv,
+                                    continuation);
+                        } else {
+                            runIfBranches(
+                                    t,
+                                    conditional,
+                                    env,
+                                    index + 1,
+                                    continuation);
+                        }
+                    });
+        }
+
+        private void runMatchArms(
+                SourceTask task,
+                Ast.MatchStmt matched,
+                Object subject,
+                Env env,
+                int index,
+                Ast.MatchArm fallback,
+                SourceFlowCont continuation) {
+            if (index >= matched.arms().size()) {
+                if (fallback == null) {
+                    continuation.accept(
+                            task,
+                            SourceFlow.throwing(
+                                    new IllegalStateException(
+                                            "exhaustive match invariant violated")));
+                    return;
+                }
+                LinkedHashMap<String, Object> bindings = new LinkedHashMap<>();
+                if (!patternMatches(
+                        fallback.pattern(),
+                        subject,
+                        bindings)) {
+                    continuation.accept(
+                            task,
+                            SourceFlow.throwing(
+                                    new IllegalStateException(
+                                            "match fallback did not accept subject")));
+                    return;
+                }
+                Env selectedEnv = new Env(env);
+                bindings.forEach(
+                        (name, value) ->
+                                selectedEnv.define(
+                                        name,
+                                        value,
+                                        Ast.BindingKind.VAL));
+                runBlock(
+                        task,
+                        fallback.body(),
+                        selectedEnv,
+                        continuation);
+                return;
+            }
+
+            Ast.MatchArm arm = matched.arms().get(index);
+            boolean catchAll =
+                    arm.guard() == null
+                            && (arm.pattern() instanceof Ast.WildcardPattern
+                                    || arm.pattern() instanceof Ast.BindingPattern);
+            if (!matched.ordered() && catchAll) {
+                runMatchArms(
+                        task,
+                        matched,
+                        subject,
+                        env,
+                        index + 1,
+                        arm,
+                        continuation);
+                return;
+            }
+
+            LinkedHashMap<String, Object> bindings = new LinkedHashMap<>();
+            if (!patternMatches(
+                    arm.pattern(),
+                    subject,
+                    bindings)) {
+                runMatchArms(
+                        task,
+                        matched,
+                        subject,
+                        env,
+                        index + 1,
+                        fallback,
+                        continuation);
+                return;
+            }
+
+            Env armEnv = new Env(env);
+            bindings.forEach(
+                    (name, value) ->
+                            armEnv.define(
+                                    name,
+                                    value,
+                                    Ast.BindingKind.VAL));
+
+            if (arm.guard() == null) {
+                runBlock(
+                        task,
+                        arm.body(),
+                        armEnv,
+                        continuation);
+                return;
+            }
+
+            evalSuspendableExpr(
+                    task,
+                    arm.guard(),
+                    armEnv,
+                    (t, guard, failure) -> {
+                        if (failure != null) {
+                            continuation.accept(
+                                    t,
+                                    SourceFlow.throwing(failure));
+                        } else if (truth(guard)) {
+                            runBlock(
+                                    t,
+                                    arm.body(),
+                                    armEnv,
+                                    continuation);
+                        } else {
+                            runMatchArms(
+                                    t,
+                                    matched,
+                                    subject,
+                                    env,
+                                    index + 1,
+                                    fallback,
+                                    continuation);
+                        }
+                    });
+        }
+
+        private void runSelectSuspendable(
+                SourceTask task,
+                Ast.SelectStmt select,
+                Env env,
+                SourceFlowCont continuation) {
+            ChannelRuntime.SelectSet set =
+                    buildStaticSelectSet(select, env);
+            ChannelRuntime.SelectPolicy policy =
+                    runtimeSelectPolicy(select.policy());
+
+            if (select.mode() == Ast.WaitMode.IMMEDIATE) {
+                try {
+                    java.util.Optional<ChannelRuntime.SelectResult> result =
+                            set.trySelect(policy);
+                    if (result.isEmpty()) {
+                        continuation.accept(task, SourceFlow.normal());
+                    } else {
+                        executeSelectedArm(
+                                select,
+                                result.get(),
+                                env,
+                                false,
+                                false);
+                        continuation.accept(task, SourceFlow.normal());
+                    }
+                } catch (RuntimeException | Error failure) {
+                    continuation.accept(
+                            task,
+                            SourceFlow.throwing(failure));
+                }
+                return;
+            }
+
+            OresFuture<ChannelRuntime.SelectResult> future =
+                    set.selectAsync(policy);
+            if (select.mode() == Ast.WaitMode.NONBLOCKING) {
+                if (!ActorRuntime.inActorExecution()) {
+                    future.cancel(false);
+                    continuation.accept(
+                            task,
+                            SourceFlow.throwing(
+                                    new IllegalStateException(
+                                            "nonblocking static select requires actor execution")));
+                    return;
+                }
+                ActorRuntime.ContinuationTarget target =
+                        context.actors().captureCurrentContinuationTarget();
+                context.actors().enqueueOnCompletion(
+                        future,
+                        target,
+                        (result, failure) -> {
+                            if (failure != null) {
+                                throw sourceFailure(failure);
+                            }
+                            try {
+                                executeSelectedArm(
+                                        select,
+                                        result,
+                                        env.snapshot(),
+                                        true,
+                                        true);
+                            } catch (RuntimeException | Error callbackFailure) {
+                                throw callbackFailure;
+                            }
+                        });
+                continuation.accept(task, SourceFlow.normal());
+                return;
+            }
+
+            if (future.isDone()) {
+                try {
+                    executeSelectedArm(
+                            select,
+                            (ChannelRuntime.SelectResult) future.join(),
+                            env,
+                            false,
+                            false);
+                    continuation.accept(task, SourceFlow.normal());
+                } catch (RuntimeException | Error failure) {
+                    continuation.accept(
+                            task,
+                            SourceFlow.throwing(failure));
+                }
+                return;
+            }
+
+            task.suspend(
+                    future,
+                    (t, value, failure) -> {
+                        if (failure != null) {
+                            continuation.accept(
+                                    t,
+                                    SourceFlow.throwing(
+                                            OresFuture.unwrap(failure)));
+                            return;
+                        }
+                        try {
+                            executeSelectedArm(
+                                    select,
+                                    (ChannelRuntime.SelectResult) value,
+                                    env,
+                                    false,
+                                    false);
+                            continuation.accept(
+                                    t,
+                                    SourceFlow.normal());
+                        } catch (RuntimeException | Error selectFailure) {
+                            continuation.accept(
+                                    t,
+                                    SourceFlow.throwing(selectFailure));
+                        }
+                    });
+        }
+
+        private void runForSuspendable(
+                SourceTask task,
+                Ast.ForStmt loop,
+                Env parent,
+                SourceFlowCont continuation) {
+            Env loopEnv = new Env(parent);
+            if (loop.initializer() == null) {
+                runForIteration(
+                        task,
+                        loop,
+                        loopEnv,
+                        continuation);
+                return;
+            }
+
+            runSuspendableStatement(
+                    task,
+                    loop.initializer(),
+                    loopEnv,
+                    new ArrayDeque<>(),
+                    (t, flow) -> {
+                        if (flow.kind() == SourceFlowKind.NORMAL) {
+                            runForIteration(
+                                    t,
+                                    loop,
+                                    loopEnv,
+                                    continuation);
+                        } else {
+                            continuation.accept(t, flow);
+                        }
+                    });
+        }
+
+        private void runForIteration(
+                SourceTask task,
+                Ast.ForStmt loop,
+                Env loopEnv,
+                SourceFlowCont continuation) {
+            if (loop.condition() == null) {
+                runForBody(
+                        task,
+                        loop,
+                        loopEnv,
+                        continuation);
+                return;
+            }
+
+            evalSuspendableExpr(
+                    task,
+                    loop.condition(),
+                    loopEnv,
+                    (t, condition, failure) -> {
+                        if (failure != null) {
+                            continuation.accept(
+                                    t,
+                                    SourceFlow.throwing(failure));
+                        } else if (!truth(condition)) {
+                            continuation.accept(
+                                    t,
+                                    SourceFlow.normal());
+                        } else {
+                            runForBody(
+                                    t,
+                                    loop,
+                                    loopEnv,
+                                    continuation);
+                        }
+                    });
+        }
+
+        private void runForBody(
+                SourceTask task,
+                Ast.ForStmt loop,
+                Env loopEnv,
+                SourceFlowCont continuation) {
+            runBlock(
+                    task,
+                    loop.body(),
+                    loopEnv,
+                    (t, flow) -> {
+                        if (flow.kind() == SourceFlowKind.BREAK) {
+                            continuation.accept(
+                                    t,
+                                    SourceFlow.normal());
+                        } else if (flow.kind() == SourceFlowKind.RETURN
+                                || flow.kind() == SourceFlowKind.THROW) {
+                            continuation.accept(t, flow);
+                        } else {
+                            if (loop.update() == null) {
+                                runForIteration(
+                                        t,
+                                        loop,
+                                        loopEnv,
+                                        continuation);
+                            } else {
+                                evalSuspendableExpr(
+                                        t,
+                                        loop.update(),
+                                        loopEnv,
+                                        (t2, ignored, failure) -> {
+                                            if (failure != null) {
+                                                continuation.accept(
+                                                        t2,
+                                                        SourceFlow.throwing(
+                                                                failure));
+                                            } else {
+                                                runForIteration(
+                                                        t2,
+                                                        loop,
+                                                        loopEnv,
+                                                        continuation);
+                                            }
+                                        });
+                            }
+                        }
+                    });
+        }
+
+        private void runLoopSuspendable(
+                SourceTask task,
+                Ast.LoopStmt loop,
+                Env env,
+                SourceFlowCont continuation) {
+            runBlock(
+                    task,
+                    loop.body(),
+                    env,
+                    (t, flow) -> {
+                        if (flow.kind() == SourceFlowKind.BREAK) {
+                            continuation.accept(
+                                    t,
+                                    SourceFlow.normal());
+                        } else if (flow.kind() == SourceFlowKind.RETURN
+                                || flow.kind() == SourceFlowKind.THROW) {
+                            continuation.accept(t, flow);
+                        } else {
+                            runLoopSuspendable(
+                                    t,
+                                    loop,
+                                    env,
+                                    continuation);
+                        }
+                    });
+        }
+
+        private void runForOfIteration(
+                SourceTask task,
+                Ast.ForOfStmt loop,
+                Env env,
+                List<?> items,
+                int index,
+                SourceFlowCont continuation) {
+            if (index >= items.size()) {
+                continuation.accept(task, SourceFlow.normal());
+                return;
+            }
+
+            Env iteration = new Env(env);
+            iteration.define(
+                    loop.bindingName(),
+                    items.get(index),
+                    loop.bindingKind());
+
+            runBlock(
+                    task,
+                    loop.body(),
+                    iteration,
+                    (t, flow) -> {
+                        if (flow.kind() == SourceFlowKind.BREAK) {
+                            continuation.accept(t, SourceFlow.normal());
+                        } else if (flow.kind() == SourceFlowKind.RETURN
+                                || flow.kind() == SourceFlowKind.THROW) {
+                            continuation.accept(t, flow);
+                        } else {
+                            runForOfIteration(
+                                    t,
+                                    loop,
+                                    env,
+                                    items,
+                                    index + 1,
+                                    continuation);
+                        }
+                    });
+        }
+
+        private void runForOfDestructureIteration(
+                SourceTask task,
+                Ast.ForOfDestructureStmt loop,
+                Env env,
+                List<?> items,
+                int index,
+                SourceFlowCont continuation) {
+            if (index >= items.size()) {
+                continuation.accept(task, SourceFlow.normal());
+                return;
+            }
+
+            List<?> parts = asSequence(items.get(index));
+            if (parts.size() != loop.bindings().size()) {
+                continuation.accept(
+                        task,
+                        SourceFlow.throwing(
+                                new IllegalArgumentException(
+                                        "for-of destructure arity mismatch")));
+                return;
+            }
+
+            Env iteration = new Env(env);
+            for (int i = 0; i < parts.size(); i++) {
+                Ast.DestructureBinding binding = loop.bindings().get(i);
+                if (!binding.isDiscard()) {
+                    iteration.define(
+                            binding.name(),
+                            parts.get(i),
+                            binding.kind());
+                }
+            }
+
+            runBlock(
+                    task,
+                    loop.body(),
+                    iteration,
+                    (t, flow) -> {
+                        if (flow.kind() == SourceFlowKind.BREAK) {
+                            continuation.accept(t, SourceFlow.normal());
+                        } else if (flow.kind() == SourceFlowKind.RETURN
+                                || flow.kind() == SourceFlowKind.THROW) {
+                            continuation.accept(t, flow);
+                        } else {
+                            runForOfDestructureIteration(
+                                    t,
+                                    loop,
+                                    env,
+                                    items,
+                                    index + 1,
+                                    continuation);
+                        }
+                    });
+        }
+
+        private void evalSuspendableCondition(
+                SourceTask task,
+                Ast.Expr condition,
+                Env env,
+                java.util.function.BiConsumer<SourceTask, ConditionResult> continuation) {
+            if (condition instanceof Ast.BinaryExpr binary
+                    && binary.operator().equals("&&")) {
+                evalSuspendableCondition(
+                        task,
+                        binary.left(),
+                        env,
+                        (t, left) -> {
+                            if (!left.matched()) {
+                                continuation.accept(t, left);
+                                return;
+                            }
+                            evalSuspendableCondition(
+                                    t,
+                                    binary.right(),
+                                    env,
+                                    (t2, right) ->
+                                            continuation.accept(
+                                                    t2,
+                                                    mergeConditionBindings(
+                                                            left,
+                                                            right)));
+                        });
+                return;
+            }
+
+            if (condition instanceof Ast.TypeTestExpr test) {
+                evalSuspendableExpr(
+                        task,
+                        test.value(),
+                        env,
+                        (t, value, failure) -> {
+                            if (failure != null) {
+                                throw sourceFailure(failure);
+                            }
+                            boolean matched =
+                                    oresTypeMatches(
+                                            value,
+                                            test.targetType());
+                            if (matched && test.binding() != null) {
+                                continuation.accept(
+                                        t,
+                                        new ConditionResult(
+                                                true,
+                                                Map.of(
+                                                        test.binding(),
+                                                        value)));
+                            } else {
+                                continuation.accept(
+                                        t,
+                                        matched
+                                                ? ConditionResult.match()
+                                                : ConditionResult.noMatch());
+                            }
+                        });
+                return;
+            }
+
+            if (condition instanceof Ast.PatternTestExpr test) {
+                evalSuspendableExpr(
+                        task,
+                        test.value(),
+                        env,
+                        (t, value, failure) -> {
+                            if (failure != null) {
+                                throw sourceFailure(failure);
+                            }
+                            LinkedHashMap<String, Object> bindings =
+                                    new LinkedHashMap<>();
+                            boolean matched =
+                                    patternMatches(
+                                            test.pattern(),
+                                            value,
+                                            bindings);
+                            continuation.accept(
+                                    t,
+                                    matched
+                                            ? new ConditionResult(
+                                                    true,
+                                                    Map.copyOf(bindings))
+                                            : ConditionResult.noMatch());
+                        });
+                return;
+            }
+
+            evalSuspendableExpr(
+                    task,
+                    condition,
+                    env,
+                    (t, value, failure) -> {
+                        if (failure != null) {
+                            throw sourceFailure(failure);
+                        }
+                        continuation.accept(
+                                t,
+                                truth(value)
+                                        ? ConditionResult.match()
+                                        : ConditionResult.noMatch());
+                    });
+        }
+
+        private ConditionResult mergeConditionBindings(
+                ConditionResult left,
+                ConditionResult right) {
+            if (!left.matched() || !right.matched()) {
+                return ConditionResult.noMatch();
+            }
+            LinkedHashMap<String, Object> bindings =
+                    new LinkedHashMap<>(left.bindings());
+            bindings.putAll(right.bindings());
+            return new ConditionResult(
+                    true,
+                    Map.copyOf(bindings));
+        }
+
+        private void evalSuspendableExpr(
+                SourceTask task,
+                Ast.Expr expr,
+                Env env,
+                SourceValueCont continuation) {
+            try {
+                if (!expressionContainsPotentialSuspension(
+                        expr,
+                        java.util.Collections.newSetFromMap(
+                                new IdentityHashMap<>()))) {
+                    continuation.accept(
+                            task,
+                            eval(expr, env),
+                            null);
+                    return;
+                }
+
+                if (expr instanceof Ast.AwaitExpr awaited) {
+                    evalSuspendableExpr(
+                            task,
+                            awaited.expression(),
+                            env,
+                            (t, value, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(
+                                            t,
+                                            null,
+                                            failure);
+                                } else {
+                                    suspendOnAwaitable(
+                                            t,
+                                            value,
+                                            continuation);
+                                }
+                            });
+                    return;
+                }
+
+                if (expr instanceof Ast.ChannelOpExpr operation) {
+                    evalSuspendableChannel(
+                            task,
+                            operation,
+                            env,
+                            continuation);
+                    return;
+                }
+
+                if (expr instanceof Ast.DynamicSelectExpr selected) {
+                    evalSuspendableExpr(
+                            task,
+                            selected.cases(),
+                            env,
+                            (t, cases, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(t, null, failure);
+                                    return;
+                                }
+                                try {
+                                    ChannelRuntime.SelectSet set =
+                                            asSelectSet(cases);
+                                    ChannelRuntime.SelectPolicy policy =
+                                            runtimeSelectPolicy(
+                                                    selected.policy());
+                                    if (selected.mode()
+                                            == Ast.WaitMode.IMMEDIATE) {
+                                        java.util.Optional<
+                                                ChannelRuntime.SelectResult> result =
+                                                set.trySelect(policy);
+                                        continuation.accept(
+                                                t,
+                                                result.isPresent()
+                                                        ? new OptionValue(
+                                                                true,
+                                                                result.get())
+                                                        : new OptionValue(
+                                                                false,
+                                                                null),
+                                                null);
+                                        return;
+                                    }
+                                    OresFuture<
+                                            ChannelRuntime.SelectResult> future =
+                                            set.selectAsync(policy);
+                                    if (selected.mode()
+                                            == Ast.WaitMode.NONBLOCKING) {
+                                        if (ActorRuntime.inActorExecution()) {
+                                            context.actors().ownCurrentActorFuture(
+                                                    future);
+                                        }
+                                        continuation.accept(
+                                                t,
+                                                future,
+                                                null);
+                                        return;
+                                    }
+                                    if (future.isDone()) {
+                                        continuation.accept(
+                                                t,
+                                                future.join(),
+                                                null);
+                                        return;
+                                    }
+                                    t.suspend(
+                                            future,
+                                            (t2, value, failure2) ->
+                                                    continuation.accept(
+                                                            t2,
+                                                            value,
+                                                            failure2));
+                                } catch (RuntimeException | Error failure2) {
+                                    continuation.accept(
+                                            t,
+                                            null,
+                                            failure2);
+                                }
+                            });
+                    return;
+                }
+
+                if (expr instanceof Ast.UnaryExpr unary) {
+                    evalSuspendableExpr(
+                            task,
+                            unary.operand(),
+                            env,
+                            (t, value, failure) ->
+                                    continuation.accept(
+                                            t,
+                                            failure == null
+                                                    ? unaryValue(
+                                                            unary.operator(),
+                                                            value)
+                                                    : null,
+                                            failure));
+                    return;
+                }
+
+                if (expr instanceof Ast.BinaryExpr binary) {
+                    if (binary.operator().equals("&&")) {
+                        evalSuspendableExpr(
+                                task,
+                                binary.left(),
+                                env,
+                                (t, left, failure) -> {
+                                    if (failure != null) {
+                                        continuation.accept(t, null, failure);
+                                    } else if (!truth(left)) {
+                                        continuation.accept(t, false, null);
+                                    } else {
+                                        evalSuspendableExpr(
+                                                t,
+                                                binary.right(),
+                                                env,
+                                                continuation);
+                                    }
+                                });
+                        return;
+                    }
+
+                    if (binary.operator().equals("||")) {
+                        evalSuspendableExpr(
+                                task,
+                                binary.left(),
+                                env,
+                                (t, left, failure) -> {
+                                    if (failure != null) {
+                                        continuation.accept(t, null, failure);
+                                    } else if (truth(left)) {
+                                        continuation.accept(t, true, null);
+                                    } else {
+                                        evalSuspendableExpr(
+                                                t,
+                                                binary.right(),
+                                                env,
+                                                continuation);
+                                    }
+                                });
+                        return;
+                    }
+
+                    evalSuspendableExpr(
+                            task,
+                            binary.left(),
+                            env,
+                            (t, left, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(t, null, failure);
+                                    return;
+                                }
+                                evalSuspendableExpr(
+                                        t,
+                                        binary.right(),
+                                        env,
+                                        (t2, right, failure2) -> {
+                                            if (failure2 != null) {
+                                                continuation.accept(
+                                                        t2,
+                                                        null,
+                                                        failure2);
+                                            } else {
+                                                try {
+                                                    Object result =
+                                                            binary(
+                                                                    binary.operator(),
+                                                                    left,
+                                                                    right);
+                                                    continuation.accept(
+                                                            t2,
+                                                            result,
+                                                            null);
+                                                } catch (RuntimeException | Error failure3) {
+                                                    continuation.accept(
+                                                            t2,
+                                                            null,
+                                                            failure3);
+                                                }
+                                            }
+                                        });
+                            });
+                    return;
+                }
+
+                if (expr instanceof Ast.ConditionalExpr conditional) {
+                    evalSuspendableExpr(
+                            task,
+                            conditional.condition(),
+                            env,
+                            (t, value, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(t, null, failure);
+                                } else {
+                                    evalSuspendableExpr(
+                                            t,
+                                            truth(value)
+                                                    ? conditional.whenTrue()
+                                                    : conditional.whenFalse(),
+                                            env,
+                                            continuation);
+                                }
+                            });
+                    return;
+                }
+
+                if (expr instanceof Ast.TypeTestExpr test) {
+                    evalSuspendableExpr(
+                            task,
+                            test.value(),
+                            env,
+                            (t, value, failure) ->
+                                    continuation.accept(
+                                            t,
+                                            failure == null
+                                                    ? oresTypeMatches(
+                                                            value,
+                                                            test.targetType())
+                                                    : null,
+                                            failure));
+                    return;
+                }
+
+                if (expr instanceof Ast.PatternTestExpr test) {
+                    evalSuspendableExpr(
+                            task,
+                            test.value(),
+                            env,
+                            (t, value, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(t, null, failure);
+                                    return;
+                                }
+                                continuation.accept(
+                                        t,
+                                        patternMatches(
+                                                test.pattern(),
+                                                value,
+                                                new LinkedHashMap<>()),
+                                        null);
+                            });
+                    return;
+                }
+
+                if (expr instanceof Ast.CastExpr cast) {
+                    evalSuspendableExpr(
+                            task,
+                            cast.value(),
+                            env,
+                            (t, value, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(t, null, failure);
+                                    return;
+                                }
+                                try {
+                                    boolean matches =
+                                            oresTypeMatches(
+                                                    value,
+                                                    cast.targetType());
+                                    if (cast.mode()
+                                            == Ast.CastMode.OPTIONAL) {
+                                        continuation.accept(
+                                                t,
+                                                new OptionValue(
+                                                        matches,
+                                                        matches ? value : null),
+                                                null);
+                                    } else if (!matches) {
+                                        continuation.accept(
+                                                t,
+                                                null,
+                                                new OresCastError(
+                                                        "cannot cast runtime type "
+                                                                + oresRuntimeTypeName(value)
+                                                                + " to "
+                                                                + cast.targetType().name()));
+                                    } else {
+                                        continuation.accept(t, value, null);
+                                    }
+                                } catch (RuntimeException | Error failure2) {
+                                    continuation.accept(t, null, failure2);
+                                }
+                            });
+                    return;
+                }
+
+                if (expr instanceof Ast.MemberExpr member) {
+                    evalSuspendableExpr(
+                            task,
+                            member.receiver(),
+                            env,
+                            (t, receiver, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(t, null, failure);
+                                    return;
+                                }
+                                try {
+                                    continuation.accept(
+                                            t,
+                                            member(
+                                                    receiver,
+                                                    member.member(),
+                                                    env),
+                                            null);
+                                } catch (RuntimeException | Error failure2) {
+                                    continuation.accept(t, null, failure2);
+                                }
+                            });
+                    return;
+                }
+
+                if (expr instanceof Ast.IndexExpr index) {
+                    evalSuspendableExpr(
+                            task,
+                            index.receiver(),
+                            env,
+                            (t, receiver, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(t, null, failure);
+                                    return;
+                                }
+                                evalSuspendableExpr(
+                                        t,
+                                        index.index(),
+                                        env,
+                                        (t2, key, failure2) -> {
+                                            if (failure2 != null) {
+                                                continuation.accept(
+                                                        t2,
+                                                        null,
+                                                        failure2);
+                                                return;
+                                            }
+                                            try {
+                                                continuation.accept(
+                                                        t2,
+                                                        indexValue(
+                                                                receiver,
+                                                                key),
+                                                        null);
+                                            } catch (RuntimeException | Error failure3) {
+                                                continuation.accept(
+                                                        t2,
+                                                        null,
+                                                        failure3);
+                                            }
+                                        });
+                            });
+                    return;
+                }
+
+                if (expr instanceof Ast.AssignExpr assignment) {
+                    evalSuspendableExpr(
+                            task,
+                            assignment.value(),
+                            env,
+                            (t, value, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(t, null, failure);
+                                    return;
+                                }
+                                try {
+                                    continuation.accept(
+                                            t,
+                                            assignEvaluated(
+                                                    assignment.target(),
+                                                    value,
+                                                    env),
+                                            null);
+                                } catch (RuntimeException | Error failure2) {
+                                    continuation.accept(t, null, failure2);
+                                }
+                            });
+                    return;
+                }
+
+                if (expr instanceof Ast.CallExpr call) {
+                    evalSuspendableCall(
+                            task,
+                            call,
+                            env,
+                            continuation);
+                    return;
+                }
+
+                if (expr instanceof Ast.NewExpr created) {
+                    evalSuspendableArguments(
+                            task,
+                            created.arguments(),
+                            env,
+                            (t, values, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(t, null, failure);
+                                    return;
+                                }
+                                try {
+                                    continuation.accept(
+                                            t,
+                                            instantiateEvaluated(
+                                                    created,
+                                                    values,
+                                                    env),
+                                            null);
+                                } catch (RuntimeException | Error failure2) {
+                                    continuation.accept(t, null, failure2);
+                                }
+                            });
+                    return;
+                }
+
+                if (expr instanceof Ast.ListExpr list) {
+                    evalSuspendableArguments(
+                            task,
+                            list.elements(),
+                            env,
+                            (t, values, failure) ->
+                                    continuation.accept(
+                                            t,
+                                            failure == null
+                                                    ? List.copyOf(values)
+                                                    : null,
+                                            failure));
+                    return;
+                }
+
+                if (expr instanceof Ast.TupleExpr tuple) {
+                    evalSuspendableArguments(
+                            task,
+                            tuple.elements(),
+                            env,
+                            (t, values, failure) ->
+                                    continuation.accept(
+                                            t,
+                                            failure == null
+                                                    ? List.copyOf(values)
+                                                    : null,
+                                            failure));
+                    return;
+                }
+
+                if (expr instanceof Ast.ObjectExpr object) {
+                    evalSuspendableObject(
+                            task,
+                            object,
+                            env,
+                            continuation);
+                    return;
+                }
+
+                continuation.accept(task, eval(expr, env), null);
+            } catch (RuntimeException | Error failure) {
+                continuation.accept(task, null, failure);
+            }
+        }
+
+        private void evalSuspendableArguments(
+                SourceTask task,
+                List<Ast.Expr> expressions,
+                Env env,
+                java.util.function.BiConsumer<
+                        SourceTask,
+                        List<Object>,
+                        Throwable> continuation) {
+            ArrayList<Object> values = new ArrayList<>(expressions.size());
+            evalSuspendableArgumentAt(
+                    task,
+                    expressions,
+                    env,
+                    values,
+                    0,
+                    continuation);
+        }
+
+        private void evalSuspendableArgumentAt(
+                SourceTask task,
+                List<Ast.Expr> expressions,
+                Env env,
+                ArrayList<Object> values,
+                int index,
+                java.util.function.BiConsumer<
+                        SourceTask,
+                        List<Object>,
+                        Throwable> continuation) {
+            if (index >= expressions.size()) {
+                continuation.accept(task, List.copyOf(values), null);
+                return;
+            }
+            evalSuspendableExpr(
+                    task,
+                    expressions.get(index),
+                    env,
+                    (t, value, failure) -> {
+                        if (failure != null) {
+                            continuation.accept(t, List.of(), failure);
+                        } else {
+                            values.add(value);
+                            evalSuspendableArgumentAt(
+                                    t,
+                                    expressions,
+                                    env,
+                                    values,
+                                    index + 1,
+                                    continuation);
+                        }
+                    });
+        }
+
+        private void evalSuspendableObject(
+                SourceTask task,
+                Ast.ObjectExpr object,
+                Env env,
+                SourceValueCont continuation) {
+            ArrayList<Object> values = new ArrayList<>();
+            evalSuspendableObjectField(
+                    task,
+                    object,
+                    env,
+                    values,
+                    0,
+                    (t, built) ->
+                            continuation.accept(
+                                    t,
+                                    built,
+                                    null));
+        }
+
+        private void evalSuspendableObjectField(
+                SourceTask task,
+                Ast.ObjectExpr object,
+                Env env,
+                ArrayList<Object> values,
+                int index,
+                java.util.function.BiConsumer<SourceTask, Map<String, Object>> continuation) {
+            if (index >= object.fields().size()) {
+                LinkedHashMap<String, Object> result = new LinkedHashMap<>();
+                for (Object value : values) {
+                    @SuppressWarnings("unchecked")
+                    Map.Entry<String, Object> entry =
+                            (Map.Entry<String, Object>) value;
+                    if (result.putIfAbsent(entry.getKey(), entry.getValue()) != null) {
+                        throw new IllegalArgumentException(
+                                "duplicate obj field " + entry.getKey());
+                    }
+                }
+                continuation.accept(task, result);
+                return;
+            }
+
+            Ast.ObjectField field = object.fields().get(index);
+            SourceValueCont afterKey =
+                    (t, key, failure) -> {
+                        if (failure != null) {
+                            continuation.accept(t, null, failure);
+                            return;
+                        }
+                        String actualKey = field.name();
+                        if (field.isDynamic()) {
+                            if (!(key instanceof String stringKey)) {
+                                continuation.accept(
+                                        t,
+                                        null,
+                                        new IllegalArgumentException(
+                                                "dynamic obj key must evaluate to a string"));
+                                return;
+                            }
+                            actualKey = stringKey;
+                        }
+                        evalSuspendableExpr(
+                                t,
+                                field.value(),
+                                env,
+                                (t2, value, failure2) -> {
+                                    if (failure2 != null) {
+                                        continuation.accept(t2, null, failure2);
+                                        return;
+                                    }
+                                    values.add(
+                                            Map.entry(actualKey, value));
+                                    evalSuspendableObjectField(
+                                            t2,
+                                            object,
+                                            env,
+                                            values,
+                                            index + 1,
+                                            continuation);
+                                });
+                    };
+
+            if (field.isDynamic()) {
+                evalSuspendableExpr(
+                        task,
+                        field.dynamicName(),
+                        env,
+                        afterKey);
+            } else {
+                afterKey.accept(task, field.name(), null);
+            }
+        }
+
+        private void suspendOnAwaitable(
+                SourceTask task,
+                Object value,
+                SourceValueCont continuation) {
+            OresFuture<?> future;
+            if (value instanceof OresFuture<?> oresFuture) {
+                future = oresFuture;
+            } else if (value instanceof Awaitable<?> awaitable) {
+                future = awaitable.getAwaited();
+            } else if (value instanceof CompletionStage<?> stage) {
+                future = OresFuture.from(stage);
+            } else {
+                continuation.accept(
+                        task,
+                        value,
+                        null);
+                return;
+            }
+
+            if (future == null) {
+                continuation.accept(
+                        task,
+                        null,
+                        new IllegalStateException(
+                                "awaitable projected a null Future"));
+                return;
+            }
+
+            if (future.isDone()) {
+                try {
+                    continuation.accept(
+                            task,
+                            future.join(),
+                            null);
+                } catch (RuntimeException | Error failure) {
+                    continuation.accept(task, null, failure);
+                }
+                return;
+            }
+
+            task.suspend(
+                    future,
+                    (t, result, failure) ->
+                            continuation.accept(
+                                    t,
+                                    result,
+                                    failure));
+        }
+
+        private void evalSuspendableChannel(
+                SourceTask task,
+                Ast.ChannelOpExpr operation,
+                Env env,
+                SourceValueCont continuation) {
+            evalSuspendableExpr(
+                    task,
+                    operation.channel(),
+                    env,
+                    (t, channelValue, channelFailure) -> {
+                        if (channelFailure != null) {
+                            continuation.accept(
+                                    t,
+                                    null,
+                                    channelFailure);
+                            return;
+                        }
+
+                        ChannelRuntime.Channel<Object> channel;
+                        try {
+                            channel = requireChannel(
+                                    channelValue,
+                                    operation.operation() == Ast.ChannelOperation.READ
+                                            ? "readch"
+                                            : "writech");
+                        } catch (RuntimeException | Error failure) {
+                            continuation.accept(t, null, failure);
+                            return;
+                        }
+
+                        if (operation.operation()
+                                == Ast.ChannelOperation.READ) {
+                            if (operation.mode()
+                                    == Ast.WaitMode.IMMEDIATE) {
+                                try {
+                                    java.util.Optional<Object> result =
+                                            channel.tryRead();
+                                    continuation.accept(
+                                            t,
+                                            result.isPresent()
+                                                    ? new OptionValue(
+                                                            true,
+                                                            result.get())
+                                                    : new OptionValue(
+                                                            false,
+                                                            null),
+                                            null);
+                                } catch (RuntimeException | Error failure) {
+                                    continuation.accept(t, null, failure);
+                                }
+                                return;
+                            }
+
+                            OresFuture<Object> future =
+                                    channel.readAsync();
+                            if (operation.mode()
+                                    == Ast.WaitMode.NONBLOCKING) {
+                                if (ActorRuntime.inActorExecution()) {
+                                    context.actors().ownCurrentActorFuture(
+                                            future);
+                                }
+                                continuation.accept(
+                                        t,
+                                        future,
+                                        null);
+                                return;
+                            }
+
+                            if (future.isDone()) {
+                                try {
+                                    continuation.accept(
+                                            t,
+                                            future.join(),
+                                            null);
+                                } catch (RuntimeException | Error failure) {
+                                    continuation.accept(t, null, failure);
+                                }
+                            } else {
+                                t.suspend(
+                                        future,
+                                        (t2, value, failure) ->
+                                                continuation.accept(
+                                                        t2,
+                                                        value,
+                                                        failure));
+                            }
+                            return;
+                        }
+
+                        evalSuspendableExpr(
+                                t,
+                                operation.value(),
+                                env,
+                                (t2, value, valueFailure) -> {
+                                    if (valueFailure != null) {
+                                        continuation.accept(
+                                                t2,
+                                                null,
+                                                valueFailure);
+                                        return;
+                                    }
+
+                                    if (operation.callback()) {
+                                        try {
+                                            if (!ActorRuntime.inActorExecution()) {
+                                                throw new IllegalStateException(
+                                                        "nb cb writech requires actor execution");
+                                            }
+                                            OresFuture<Void> completion =
+                                                    channel.writeAsync(value);
+                                            ActorRuntime.ContinuationTarget target =
+                                                    context.actors()
+                                                            .captureCurrentContinuationTarget();
+                                            Env callbackEnv = env.snapshot();
+                                            context.actors().enqueueOnCompletion(
+                                                    completion,
+                                                    target,
+                                                    (ignored, failure) -> {
+                                                        if (failure != null) {
+                                                            throw sourceFailure(failure);
+                                                        }
+                                                        try {
+                                                            executeBlock(
+                                                                    operation.callbackBody(),
+                                                                    callbackEnv,
+                                                                    true);
+                                                        } catch (ReturnSignal returned) {
+                                                            if (returned.value != null) {
+                                                                throw new IllegalStateException(
+                                                                        "channel write callback cannot return a value");
+                                                            }
+                                                        }
+                                                    });
+                                            continuation.accept(
+                                                    t2,
+                                                    null,
+                                                    null);
+                                        } catch (RuntimeException | Error failure) {
+                                            continuation.accept(t2, null, failure);
+                                        }
+                                        return;
+                                    }
+
+                                    if (operation.mode()
+                                            == Ast.WaitMode.IMMEDIATE) {
+                                        try {
+                                            continuation.accept(
+                                                    t2,
+                                                    channel.tryWrite(value),
+                                                    null);
+                                        } catch (RuntimeException | Error failure) {
+                                            continuation.accept(
+                                                    t2,
+                                                    null,
+                                                    failure);
+                                        }
+                                        return;
+                                    }
+
+                                    OresFuture<Void> future =
+                                            channel.writeAsync(value);
+                                    if (operation.mode()
+                                            == Ast.WaitMode.NONBLOCKING) {
+                                        if (ActorRuntime.inActorExecution()) {
+                                            context.actors().ownCurrentActorFuture(
+                                                    future);
+                                        }
+                                        continuation.accept(
+                                                t2,
+                                                future,
+                                                null);
+                                        return;
+                                    }
+
+                                    if (future.isDone()) {
+                                        try {
+                                            future.join();
+                                            continuation.accept(
+                                                    t2,
+                                                    null,
+                                                    null);
+                                        } catch (RuntimeException | Error failure) {
+                                            continuation.accept(
+                                                    t2,
+                                                    null,
+                                                    failure);
+                                        }
+                                    } else {
+                                        t2.suspend(
+                                                future,
+                                                (t3, ignored, failure) ->
+                                                        continuation.accept(
+                                                                t3,
+                                                                null,
+                                                                failure));
+                                    }
+                                });
+                    });
+        }
+
+        private void evalSuspendableCall(
+                SourceTask task,
+                Ast.CallExpr call,
+                Env env,
+                SourceValueCont continuation) {
+            if (call.callee() instanceof Ast.NameExpr name
+                    && env.lookup(name.name()) == Env.MISSING) {
+                Ast.FunctionDecl direct = findFunction(name.name());
+                if (direct != null) {
+                    evalSuspendableArguments(
+                            task,
+                            call.arguments(),
+                            env,
+                            (t, values, failure) -> {
+                                if (failure != null) {
+                                    continuation.accept(t, null, failure);
+                                    return;
+                                }
+                                try {
+                                    Invocation invocation =
+                                            functionInvocation(direct, values);
+                                    completeSourceInvocation(
+                                            t,
+                                            invocation,
+                                            direct.async()
+                                                    || direct.actorKind()
+                                                    == Ast.ActorKind.NONE
+                                                            ? direct.async()
+                                                            : false,
+                                            continuation);
+                                } catch (RuntimeException | Error failure2) {
+                                    continuation.accept(t, null, failure2);
+                                }
+                            });
+                    return;
+                }
+            }
+
+            if (call.callee() instanceof Ast.MemberExpr member) {
+                evalSuspendableExpr(
+                        task,
+                        member.receiver(),
+                        env,
+                        (t, receiver, failure) -> {
+                            if (failure != null) {
+                                continuation.accept(t, null, failure);
+                                return;
+                            }
+                            evalSuspendableArguments(
+                                    t,
+                                    call.arguments(),
+                                    env,
+                                    (t2, values, failure2) -> {
+                                        if (failure2 != null) {
+                                            continuation.accept(t2, null, failure2);
+                                            return;
+                                        }
+                                        try {
+                                            Invocation invocation =
+                                                    prepareInvocationEvaluated(
+                                                            call,
+                                                            receiver,
+                                                            values,
+                                                            env);
+                                            boolean declaredFuture =
+                                                    invocationDeclaresAsync(
+                                                            invocation);
+                                            completeSourceInvocation(
+                                                    t2,
+                                                    invocation,
+                                                    declaredFuture,
+                                                    continuation);
+                                        } catch (RuntimeException | Error failure3) {
+                                            continuation.accept(t2, null, failure3);
+                                        }
+                                    });
+                        });
+                return;
+            }
+
+            evalSuspendableExpr(
+                    task,
+                    call.callee(),
+                    env,
+                    (t, callee, failure) -> {
+                        if (failure != null) {
+                            continuation.accept(t, null, failure);
+                            return;
+                        }
+                        evalSuspendableArguments(
+                                t,
+                                call.arguments(),
+                                env,
+                                (t2, values, failure2) -> {
+                                    if (failure2 != null) {
+                                        continuation.accept(t2, null, failure2);
+                                        return;
+                                    }
+                                    if (!(callee instanceof Invokable invokable)) {
+                                        continuation.accept(
+                                                t2,
+                                                null,
+                                                new IllegalArgumentException(
+                                                        "value is not callable"));
+                                        return;
+                                    }
+                                    Invocation invocation =
+                                            invokableInvocation(invokable, values);
+                                    completeSourceInvocation(
+                                            t2,
+                                            invocation,
+                                            false,
+                                            continuation);
+                                });
+                    });
+        }
+
+        private void completeSourceInvocation(
+                SourceTask task,
+                Invocation invocation,
+                boolean declaredFuture,
+                SourceValueCont continuation) {
+            try {
+                Object result = invoke(invocation);
+                if (result instanceof OresFuture<?> future
+                        && !declaredFuture) {
+                    task.suspend(
+                            future,
+                            (t, value, failure) ->
+                                    continuation.accept(
+                                            t,
+                                            value,
+                                            failure));
+                } else {
+                    continuation.accept(
+                            task,
+                            result,
+                            null);
+                }
+            } catch (RuntimeException | Error failure) {
+                continuation.accept(task, null, failure);
+            }
+        }
+
+        private boolean invocationDeclaresAsync(Invocation invocation) {
+            return switch (invocation.kind()) {
+                case FUNCTION, FUNCTION_BODY ->
+                        ((Ast.FunctionDecl) invocation.target()).async();
+                case METHOD, STATIC_FUNCTION, STATIC_FUNCTION_BODY ->
+                        ((Ast.MethodDecl) invocation.target()).async();
+                case INVOKABLE -> false;
+            };
+        }
+
+        private Invocation prepareInvocationEvaluated(
+                Ast.CallExpr call,
+                Object receiver,
+                List<Object> args,
+                Env env) {
+            Ast.MemberExpr member =
+                    (Ast.MemberExpr) call.callee();
+
+            if (receiver instanceof OresObject object) {
+                Ast.MethodDecl method =
+                        object.owner.findMethod(
+                                object.klass,
+                                member.member(),
+                                args.size(),
+                                new LinkedHashSet<>());
+                if (method != null) {
+                    object.owner.requireClassMemberVisible(
+                            method.visibility(),
+                            object.owner.declaringClass(method),
+                            env.accessClass(),
+                            "method",
+                            method.name());
+                    return object.owner.methodInvocation(
+                            object,
+                            method,
+                            args);
+                }
+
+                Object fieldValue = object.fields.get(member.member());
+                if (fieldValue instanceof Invokable invokable) {
+                    return object.owner.invokableInvocation(
+                            invokable,
+                            args);
+                }
+            }
+
+            if (receiver instanceof ClassFacade klass) {
+                Ast.MethodDecl method =
+                        klass.owner().findStaticFunction(
+                                klass.klass(),
+                                member.member(),
+                                args.size(),
+                                new LinkedHashSet<>());
+                if (method == null) {
+                    throw new IllegalArgumentException(
+                            "no static function " + klass.klass().name()
+                                    + "." + member.member());
+                }
+                return klass.owner().staticFunctionInvocation(
+                        method,
+                        args);
+            }
+
+            if (receiver instanceof ModuleFacade module) {
+                return module.owner().prepareModuleInvocation(
+                        module.module(),
+                        member.member(),
+                        args);
+            }
+
+            if (receiver instanceof ImportedNamespace namespace) {
+                return namespace.owner().prepareImportedInvocation(
+                        namespace.kind(),
+                        member.member(),
+                        args);
+            }
+
+            Object callee = member(receiver, member.member(), env);
+            if (!(callee instanceof Invokable invokable)) {
+                throw new IllegalArgumentException(
+                        "member is not callable: " + member.member());
+            }
+            return invokableInvocation(invokable, args);
+        }
+
+        private Object indexValue(Object receiver, Object index) {
+            if (receiver instanceof DynamicStructValue dynamic) {
+                if (!(index instanceof String key)) {
+                    throw new IllegalArgumentException(
+                            "DynamicStruct key must be a string");
+                }
+                if (!dynamic.fields.containsKey(key)) {
+                    throw new IllegalArgumentException(
+                            "unknown DynamicStruct key " + key);
+                }
+                return dynamic.fields.get(key);
+            }
+            if (receiver instanceof Map<?, ?> map) {
+                if (!(index instanceof String key)) {
+                    throw new IllegalArgumentException(
+                            "object/map key must be a string");
+                }
+                if (!map.containsKey(key)) {
+                    throw new IllegalArgumentException(
+                            "unknown object/map key " + key);
+                }
+                return map.get(key);
+            }
+            if (!(index instanceof Number number)) {
+                throw new IllegalArgumentException(
+                        "array/list index must be an integer");
+            }
+            int i = Math.toIntExact(number.longValue());
+            if (receiver instanceof List<?> list) return list.get(i);
+            if (receiver instanceof Object[] array) return array[i];
+            throw new IllegalArgumentException(
+                    "value is not indexable");
+        }
+
+        private Object unaryValue(String operator, Object value) {
+            return switch (operator) {
+                case "&", "&mut", "+" -> value;
+                case "!" -> !truth(value);
+                case "~" -> ~integralLong(value);
+                case "-" -> negate(value);
+                default -> throw new IllegalArgumentException(
+                        "unsupported unary operator " + operator);
+            };
+        }
+
+        private Object assignEvaluated(
+                Ast.Expr target,
+                Object value,
+                Env env) {
+            if (target instanceof Ast.NameExpr name) {
+                env.assign(name.name(), value);
+                return value;
+            }
+            if (target instanceof Ast.MemberExpr member) {
+                Object receiver = eval(member.receiver(), env);
+                if (receiver instanceof OresObject object) {
+                    OwnedField targetField =
+                            object.owner.findField(
+                                    object.klass,
+                                    member.member(),
+                                    new LinkedHashSet<>());
+                    if (targetField == null) {
+                        throw new IllegalArgumentException(
+                                "unknown field " + member.member());
+                    }
+                    if (!targetField.field().mutable()) {
+                        throw new IllegalArgumentException(
+                                "field '" + object.klass.name()
+                                        + "." + member.member()
+                                        + "' is immutable");
+                    }
+                    object.fields.put(member.member(), value);
+                    return value;
+                }
+                if (receiver instanceof DynamicStructValue dynamic) {
+                    dynamic.fields.put(member.member(), value);
+                    return value;
+                }
+                throw new IllegalArgumentException(
+                        "member assignment requires mutable object state");
+            }
+            if (target instanceof Ast.IndexExpr index) {
+                Object receiver = eval(index.receiver(), env);
+                Object key = eval(index.index(), env);
+                if (receiver instanceof DynamicStructValue dynamic) {
+                    if (!(key instanceof String string)) {
+                        throw new IllegalArgumentException(
+                                "DynamicStruct key must be a string");
+                    }
+                    dynamic.fields.put(string, value);
+                    return value;
+                }
+                if (receiver instanceof List<?> raw
+                        && key instanceof Number number) {
+                    @SuppressWarnings("unchecked")
+                    List<Object> list = (List<Object>) raw;
+                    list.set(Math.toIntExact(number.longValue()), value);
+                    return value;
+                }
+                throw new IllegalArgumentException(
+                        "indexed assignment requires mutable array/list or DynamicStruct");
+            }
+            throw new IllegalArgumentException(
+                    "unsupported assignment target");
+        }
+
+        private Object instantiateEvaluated(
+                Ast.NewExpr created,
+                List<Object> args,
+                Env env) {
+            if (created.type().name().equals("DynamicStruct")) {
+                if (!args.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "DynamicStruct<T> constructor takes no positional arguments");
+                }
+                return new DynamicStructValue();
+            }
+            HostClassFacade hostClass =
+                    hostClasses.get(created.type().name());
+            if (hostClass != null) {
+                context.requireCapability(
+                        IsolatePolicy.Capability.JAVA_INTEROP,
+                        "Java host constructor " + hostClass.className());
+                return instantiateHost(hostClass, args);
+            }
+            Ast.ClassDecl klass = findClass(created.type().name());
+            Evaluator owner = this;
+            if (klass == null) {
+                Object imported = importedValue(created.type().name());
+                if (imported instanceof ClassFacade externalClass) {
+                    owner = externalClass.owner();
+                    klass = externalClass.klass();
+                }
+            }
+            if (klass == null) {
+                throw new IllegalArgumentException(
+                        "unknown class " + created.type().name());
+            }
+            return owner.instantiate(klass, args);
+        }
+
         private Object callFunctionRaw(Ast.FunctionDecl fn, List<Object> args) {
             if (fn.name().equals("init")) {
                 throw new IllegalStateException(
                         "init is a lifecycle hook and cannot be invoked directly; startup runs it exactly once");
             }
+
             List<Object> normalized = normalizeFunctionArguments(fn, args);
+
             if (fn.actorKind() == Ast.ActorKind.NONE) {
-                if (!fn.async()) return callFunctionBodyRaw(fn, normalized);
+                if (fn.async() || functionContainsPotentialSuspension(fn)) {
+                    OresFuture<Object> future =
+                            startSourceFunctionTask(
+                                    fn,
+                                    fn.async()
+                                            ? detachAsyncArguments(normalized)
+                                            : normalized);
 
-                List<?> detached = detachAsyncArguments(normalized);
-                return context.asyncRuntime().submit(() ->
-                        detachAsyncValue(
-                                invoke(functionBodyInvocation(fn, detached)),
-                                new IdentityHashMap<>()));
-            }
+                    if (fn.async()) {
+                        return future;
+                    }
 
-            if (fn.async()) {
-                throw new IllegalStateException(
-                        "async actor callables require mailbox continuation lowering and are not executed synchronously");
+                    return returnSourceTaskResult(future, false);
+                }
+
+                return callFunctionBodyRaw(fn, normalized);
             }
 
             if (ActorRuntime.inActorExecution()) {
@@ -464,11 +3438,38 @@ public final class OresEvalRootNode extends RootNode {
                 case UNTRUSTED -> ActorRuntime.ActorKind.UNTRUSTED;
             };
 
+            if (fn.async() || functionContainsPotentialSuspension(fn)) {
+                OresFuture<Object> completion =
+                        context.actors().invokeAsync(
+                                runtimeKind,
+                                normalized,
+                                (delivered, actorContext) ->
+                                        invoke(
+                                                functionBodyInvocation(
+                                                        fn,
+                                                        delivered)));
+
+                return fn.async()
+                        ? completion
+                        : returnSourceTaskResult(completion, false);
+            }
+
             return context.actors().invoke(
                     runtimeKind,
                     normalized,
                     (delivered, actorContext) ->
                             invoke(functionBodyInvocation(fn, delivered)));
+        }
+
+        private Object returnSourceTaskResult(
+                OresFuture<?> future,
+                boolean declaredFuture) {
+            if (declaredFuture
+                    || ActorRuntime.inActorExecution()
+                    || OresScheduler.current() != null) {
+                return future;
+            }
+            return future.join();
         }
 
         private List<Object> normalizeFunctionArguments(Ast.FunctionDecl fn, List<?> args) {
@@ -582,6 +3583,16 @@ public final class OresEvalRootNode extends RootNode {
         }
 
         private Object callFunctionBodyRaw(Ast.FunctionDecl fn, List<?> args) {
+            if (fn.async() || functionContainsPotentialSuspension(fn)) {
+                OresFuture<Object> future =
+                        startSourceFunctionTask(
+                                fn,
+                                fn.async()
+                                        ? detachAsyncArguments(args)
+                                        : args);
+                return returnSourceTaskResult(future, fn.async());
+            }
+
             Env env = new Env(null, fn.nonLexical());
             for (int i = 0; i < fn.parameters().size(); i++) {
                 Ast.Param param = fn.parameters().get(i);
@@ -607,11 +3618,15 @@ public final class OresEvalRootNode extends RootNode {
         }
 
         private Object callMethodRaw(OresObject receiver, Ast.MethodDecl method, List<?> args) {
-            if (method.async()) {
-                throw new IllegalStateException(
-                        "async instance methods are not admitted until receiver ownership can be moved into the task");
+            if (args.size() != method.parameters().size()) {
+                throw new IllegalArgumentException(
+                        "method " + method.name() + " arity mismatch");
             }
-            if (args.size() != method.parameters().size()) throw new IllegalArgumentException("method " + method.name() + " arity mismatch");
+            if (method.async() || methodContainsPotentialSuspension(method)) {
+                OresFuture<Object> future =
+                        startSourceMethodTask(method, receiver, args);
+                return returnSourceTaskResult(future, method.async());
+            }
             Env env = new Env(null, false, declaringClass(method));
             if (!method.isStatic()) env.define("self", receiver, Ast.BindingKind.VAL);
             for (int i = 0; i < method.parameters().size(); i++) {
@@ -2040,15 +5055,25 @@ public final class OresEvalRootNode extends RootNode {
         }
 
         private Object callStaticFunctionRaw(Ast.MethodDecl fn, List<?> args) {
-            if (!fn.isStatic()) throw new IllegalArgumentException("not a static class function: " + fn.name());
-            if (args.size() != fn.parameters().size()) throw new IllegalArgumentException("static function " + fn.name() + " arity mismatch");
-            if (!fn.async()) return callStaticFunctionBodyRaw(fn, args);
-
-            List<?> detached = detachAsyncArguments(args);
-            return context.asyncRuntime().submit(() ->
-                    detachAsyncValue(
-                            invoke(staticFunctionBodyInvocation(fn, detached)),
-                            new IdentityHashMap<>()));
+            if (!fn.isStatic()) {
+                throw new IllegalArgumentException(
+                        "not a static class function: " + fn.name());
+            }
+            if (args.size() != fn.parameters().size()) {
+                throw new IllegalArgumentException(
+                        "static function " + fn.name() + " arity mismatch");
+            }
+            if (fn.async() || methodContainsPotentialSuspension(fn)) {
+                OresFuture<Object> future =
+                        startSourceMethodTask(
+                                fn,
+                                null,
+                                fn.async()
+                                        ? detachAsyncArguments(args)
+                                        : args);
+                return returnSourceTaskResult(future, fn.async());
+            }
+            return callStaticFunctionBodyRaw(fn, args);
         }
 
         private Object callStaticFunctionBodyRaw(Ast.MethodDecl fn, List<?> args) {

@@ -23,7 +23,7 @@ final class UntrustedActorTest {
 
         Ast.Program klassProgram = Parser.parse("""
                 untrusted actor Worker {
-                  pub fnc run() => void {
+                  pub fnc run() : void {
                     return;
                   }
                 }
@@ -33,7 +33,7 @@ final class UntrustedActorTest {
         assertEquals(Ast.ActorKind.UNTRUSTED, klass.actorKind());
 
         Ast.Program fnProgram = Parser.parse("""
-                pub untrusted actor fnc worker() => void {
+                pub untrusted actor fnc worker() : void {
                   for (let i = 0; i < 10; i = i + 1) {
                     val x = i;
                   }
@@ -49,12 +49,12 @@ final class UntrustedActorTest {
     void conflictingOrDetachedUntrustedModifierIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> Parser.parse("""
                 shared untrusted actor Worker {
-                  pub fnc run() => void { return; }
+                  pub fnc run() : void { return; }
                 }
                 """));
 
         assertThrows(IllegalArgumentException.class, () -> Parser.parse("""
-                untrusted fnc nope() => void {
+                untrusted fnc nope() : void {
                   return;
                 }
                 """));
@@ -63,7 +63,7 @@ final class UntrustedActorTest {
     @Test
     void capabilityAdmissionUsesFixedUntrustedPolicy() {
         Ast.Program program = Parser.parse("""
-                pub untrusted actor fnc worker() => void {
+                pub untrusted actor fnc worker() : void {
                   val id = process.context_id;
                   return;
                 }
@@ -78,12 +78,12 @@ final class UntrustedActorTest {
     @Test
     void localHelperCannotHideForbiddenCapability() {
         Ast.Program program = Parser.parse("""
-                fnc helper() => void {
+                fnc helper() : void {
                   val id = process.context_id;
                   return;
                 }
 
-                pub untrusted actor fnc worker() => void {
+                pub untrusted actor fnc worker() : void {
                   helper();
                   return;
                 }
@@ -100,7 +100,7 @@ final class UntrustedActorTest {
         Ast.Program program = Parser.parse("""
                 import * as plugin from "./plugin.ores";
 
-                pub untrusted actor fnc worker() => void {
+                pub untrusted actor fnc worker() : void {
                   plugin.run();
                   return;
                 }
@@ -115,7 +115,7 @@ final class UntrustedActorTest {
     @Test
     void capabilityFacadesCannotBeLaunderedThroughAliases() {
         Ast.Program program = Parser.parse("""
-                pub untrusted actor fnc worker() => void {
+                pub untrusted actor fnc worker() : void {
                   val p = process;
                   return;
                 }
@@ -130,12 +130,12 @@ final class UntrustedActorTest {
     @Test
     void privilegedHelpersCannotBeLaunderedAsFunctionValues() {
         Ast.Program program = Parser.parse("""
-                fnc privileged() => void {
+                fnc privileged() : void {
                   val id = process.context_id;
                   return;
                 }
 
-                pub untrusted actor fnc worker() => void {
+                pub untrusted actor fnc worker() : void {
                   val callback = privileged;
                   return;
                 }

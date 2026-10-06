@@ -98,7 +98,7 @@ public final class OresEvalRootNode extends RootNode {
         // link/init/main commands to install a full import graph before init.
         current.link();
         current.initialize();
-        return current.executeMain(arguments);
+        return context.runRootMain(() -> current.executeMain(arguments));
     }
 
     private Evaluator evaluator(OresContext context) {

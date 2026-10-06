@@ -20,21 +20,17 @@ top_level_item  = annotated_module_decl
                 | callable_decl
                 | class_decl
                 | interface_decl
-                | trait_decl
                 | type_decl
                 | binding_decl ;
 
-annotated_module_decl = { annotation } "define" "module" IDENT module_body_intro
+annotated_module_decl = { annotation } "define" "module" IDENT
                         { module_member } "end" ;
-module_body_intro = "with" type_ref { "," type_ref } "as"
-                  | [ "as" ] ;
 
 module_member   = actor_decl
                 | actor_callable_decl
                 | callable_decl
                 | class_decl
                 | interface_decl
-                | trait_decl
                 | type_decl
                 | binding_decl ;
 
@@ -92,27 +88,23 @@ static_function_decl
 
 interface_decl  = visibility "interface" IDENT [ generic_params ]
                   [ "extends" type_ref { "," type_ref } ]
-                  [ "as" ] interface_body
-                | visibility "define" "interface" IDENT [ generic_params ]
+                  interface_body
+                | "define" "interface" IDENT [ generic_params ]
                   [ "extends" type_ref { "," type_ref } ]
-                  [ "as" ] interface_body ;
-
-trait_decl      = visibility "define" "trait" IDENT [ generic_params ]
-                  [ "extends" type_ref { "," type_ref } ]
-                  [ "as" ] interface_body ;
+                  interface_body ;
 
 interface_body  = "{" { interface_member } "}"
                 | { interface_member } "end" ;
 
-interface_member= "fnc" IDENT [ generic_params ] "(" [ param_list ] ")" contract_return_spec member_terminator
-                | [ binding_kind ] IDENT ":" type_ref member_terminator
+interface_member= "fnc" IDENT [ generic_params ] "(" [ param_list ] ")" type_return_spec member_terminator
+                | IDENT ":" type_ref member_terminator
                 | [ binding_kind ] type_ref IDENT member_terminator ;
 
 type_decl       = "type" IDENT [ generic_params ] "=" type_ref stmt_terminator ;
 
 annotation      = "@" IDENT [ "<" [ type_args ] ">" | "(" [ type_args ] ")" ] ;
 return_spec     = [ ( ":" | "->" ) type_ref ] ;
-contract_return_spec = [ ( ":" | "->" | "=>" ) type_ref ] ;
+type_return_spec= [ "=>" type_ref ] ;
 generic_params  = "<" IDENT { "," IDENT } ">" ;
 param_list      = param { "," param } ;
 param           = type_ref [ "mut" ] IDENT
@@ -203,10 +195,10 @@ expression      = assignment ;
 assignment      = conditional [ "=" assignment ] ;
 conditional     = logic_or [ "?" assignment ":" conditional ] ;
 logic_or        = equality { "|" equality } ;
-equality        = comparison { ( "==" | "!=" ) comparison } ;
+equality        = comparison { ( "eq" | "neq" | "!eq" | "==" | "!=" | "is" ) comparison } ;
 comparison      = additive
                   { ( "<" | "<=" | ">" | ">=" ) additive
-                  | "is" type_ref [ IDENT ]
+                  | "is" "type" type_ref [ IDENT ]
                   | "matches" pattern
                   | "as" [ "?" ] type_ref
                   } ;
@@ -218,7 +210,7 @@ postfix         = primary { call_suffix | member_suffix | index_suffix } ;
 call_suffix     = "(" [ argument_list ] ")" ;
 member_suffix   = "." member_name ;
 member_name     = IDENT | "stop" | "do" | "done"
-                | "match" | "matches" | "is" | "when"
+                | "match" | "matches" | "eq" | "neq" | "is" | "when"
                 | "case" | "default" | "first" | "switch" ;
 index_suffix    = "[" expression "]" ;
 argument_list   = expression { "," expression } ;
@@ -370,8 +362,18 @@ member_terminator = ";" | INTERFACE_CLOSING_BOUNDARY ;
    - match/switch arm implementations use "->". "=>" is rejected in executable
      arms so the slim-arrow/execution versus fat-arrow/type distinction remains
      syntactically enforceable.
-   - "is" performs nominal type testing/refinement; "matches" evaluates a full
-     pattern predicate; "as" is a checked cast and "as?" returns Option<T>.
+   - eq is canonical value equality and neq is canonical value inequality.
+     Adjacent !eq is an equivalent inequality spelling. == and != remain
+     accepted compatibility aliases but are non-canonical.
+   - Plain infix is is identity for identity-bearing reference/handle values.
+     Nominal expression type tests are explicit as value is type T or
+     value is type T binding. Prefix is T [binding] remains the compact
+     type-pattern form inside match arms.
+   - eq, neq, and is are reserved operator keywords. They are not ordinary
+     binding or callable names, though keyword spellings remain legal after
+     '.' in the member-name namespace.
+   - "matches" evaluates a full pattern predicate; "as" is a checked cast and
+     "as?" returns Option<T>.
    - Plain match is exclusive and exhaustive: the static checker must prove
      non-fallback arms disjoint and coverage complete. A final else/"_"/bare
      binding is the complement fallback. "match first" explicitly requests

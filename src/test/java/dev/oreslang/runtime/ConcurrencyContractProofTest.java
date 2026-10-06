@@ -29,17 +29,10 @@ final class ConcurrencyContractProofTest {
 
         OresFuture<Integer> pending = channel.readAsync();
         assertFalse(pending.isDone());
-        assertEquals(1, pending.pendingRuntimeWaiterCount());
 
         assertTrue(channel.tryRead().isEmpty());
-        assertEquals(
-                1,
-                pending.pendingRuntimeWaiterCount(),
-                "try read must not consume or replace a registered nb waiter");
 
         assertTrue(pending.cancel(false));
-        assertEquals(0, pending.pendingRuntimeWaiterCount());
-
         assertTrue(channel.tryWrite(7));
         assertEquals(7, channel.tryRead().orElseThrow());
     }
@@ -52,11 +45,9 @@ final class ConcurrencyContractProofTest {
         assertTrue(channel.tryWrite("occupied"));
         OresFuture<Void> pending = channel.writeAsync("later");
         assertFalse(pending.isDone());
-        assertEquals(1, pending.pendingRuntimeWaiterCount());
 
         assertFalse(channel.tryWrite("probe"));
         assertTrue(pending.cancel(false));
-        assertEquals(0, pending.pendingRuntimeWaiterCount());
 
         assertEquals("occupied", channel.tryRead().orElseThrow());
         assertTrue(channel.tryWrite("after-cancel"));

@@ -656,7 +656,7 @@ public final class OresFuture<T> implements Future<T>, Awaitable<T> {
         throw new UnsupportedOperationException("OresFuture completion is runtime-owned");
     }
 
-    static Throwable unwrap(Throwable failure) {
+    public static Throwable unwrap(Throwable failure) {
         Throwable current = failure;
         while ((current instanceof CompletionException || current instanceof ExecutionException)
                 && current.getCause() != null) {

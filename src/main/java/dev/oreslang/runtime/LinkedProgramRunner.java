@@ -46,6 +46,14 @@ public final class LinkedProgramRunner {
     public static IncrementalCompiler.BuildResult validate(
             Path entryFile,
             Map<String, String> environment) throws IOException {
+        return validate(entryFile, environment, null, PermissionCheckMode.COMPILE);
+    }
+
+    public static IncrementalCompiler.BuildResult validate(
+            Path entryFile,
+            Map<String, String> environment,
+            IsolatePolicy policy,
+            PermissionCheckMode permissionCheckMode) throws IOException {
         Path entry = entryFile.toAbsolutePath().normalize();
         if (!Files.isRegularFile(entry)) throw new IllegalArgumentException("not a file: " + entry);
 
@@ -54,10 +62,27 @@ public final class LinkedProgramRunner {
         LinkedHashMap<String, Map<String, String>> importResolutions = new LinkedHashMap<>();
         collectImportClosure(entry, units, projectConfig, importResolutions);
         ensureJavaEntryContainsOres(entry, units);
+
+        if (policy != null) {
+            boolean hasJavaSource = units.values().stream().anyMatch(MixedSourceUnit::hasJavaSource);
+            if (hasJavaSource) {
+                policy.require(IsolatePolicy.Capability.JAVA_SOURCE_INTEROP, "mixed Java/Ores source islands");
+                policy.require(IsolatePolicy.Capability.JAVA_INTEROP, "mixed Java/Ores object interop");
+                if (policy.adversarial()) {
+                    throw new SecurityException("mixed Java/Ores source islands are disabled for adversarial isolates");
+                }
+            }
+        }
+
         Map<String, String> sources = oresSources(units);
         IncrementalCompiler.BuildResult build =
                 new IncrementalCompiler().compile(sources, importResolutions);
         Map<String, Ast.Program> programs = parsePrograms(sources);
+        if (policy != null) {
+            for (Ast.Program program : programs.values()) {
+                CapabilityChecker.check(program, policy, permissionCheckMode);
+            }
+        }
         try (MixedJavaCompiler.Compilation ignored = MixedJavaCompiler.compile(new ArrayList<>(units.values()), programs)) {
             return build;
         }
@@ -97,6 +122,28 @@ public final class LinkedProgramRunner {
             Map<String, String> environment,
             OutputStream out,
             OutputStream err) throws IOException {
+        return run(
+                entryFile,
+                policy,
+                RuntimePermissions.fromCapabilities(policy.capabilities()),
+                PermissionCheckMode.COMPILE,
+                executionProfile,
+                allowedHostClasses,
+                environment,
+                out,
+                err);
+    }
+
+    public static IncrementalCompiler.BuildResult run(
+            Path entryFile,
+            IsolatePolicy policy,
+            RuntimePermissions permissions,
+            PermissionCheckMode permissionCheckMode,
+            ExecutionProfile executionProfile,
+            Set<String> allowedHostClasses,
+            Map<String, String> environment,
+            OutputStream out,
+            OutputStream err) throws IOException {
         Path entry = entryFile.toAbsolutePath().normalize();
         if (!Files.isRegularFile(entry)) throw new IllegalArgumentException("not a file: " + entry);
 
@@ -131,7 +178,11 @@ public final class LinkedProgramRunner {
             ClassLoader previousLoader = currentThread.getContextClassLoader();
             currentThread.setContextClassLoader(javaCompilation.classLoader());
             try {
-                Context.Builder builder = policy.restrictedContextBuilder(executionProfile, effectiveHostClasses);
+                Context.Builder builder = policy.restrictedContextBuilder(
+                        executionProfile,
+                        effectiveHostClasses,
+                        permissions,
+                        permissionCheckMode);
                 if (out != null) builder.out(forwardingStream(out));
                 if (err != null) builder.err(forwardingStream(err));
 

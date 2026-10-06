@@ -7,13 +7,13 @@ Oreslang is a statically typed guest language for GraalVM/Truffle. Named types a
 A source file may contain multiple named modules. A module is a namespace: exported members are accessed through the module name, such as `math.add(1, 2)`.
 
 ```ores
-define module math as
+define module math
   pub fnc add(int a, int b): int {
     return a + b;
   }
 end
 
-define module app as
+define module app
   pub fnc main(): void {
     val answer = math.add(40, 2);
     stdio.println(answer);
@@ -44,11 +44,9 @@ Comma-separated and parenthesized named selections are equivalent, so
 `import types (X, Y, Z) from "../foo";` produce the same import selection.
 The existing brace form remains accepted for compatibility. `types` is the
 union selector for type-like declarations: `trait`, `struct`, `interface`,
-and `type`. Interfaces, traits, and type aliases are first-class declarations
-in the current compiler. `import interface` and `import trait` are distinct
-selectors and fail closed if the exported declaration has the wrong contract
-kind. `struct` remains reserved until the standalone struct declaration kind
-lands.
+and `type`. On the current v0.6 AST, interface and type-alias declarations are
+available; trait/struct selectors are reserved and fail closed at link
+validation until those declaration kinds land on the current compiler branch.
 
 Wildcard imports always require a namespace alias. A single named import may use
 `as` to choose its local binding; the original source name still controls export
@@ -105,75 +103,26 @@ specific sequencing relationship *between* two init hooks in the same cycle,
 that relationship should be made explicit in application code rather than
 inferred from the import edges.
 
-## Module traits, contracts, and `Module<T>` handles
+## Module interfaces / OCaml-style module signatures
 
-A trait can describe the structural public shape required of a module. The
-canonical declaration and conformance syntax is `define trait ... as` plus
-`define module ... with Trait as`:
+Interfaces can describe the structural public shape required of a module. A module opts into checking with `@AdheresTo(...)`:
 
 ```ores
-pub define trait MathModule as
-  fnc add(int a, int b): int;
-  const name: String;
+define module contracts
+  define interface MathApi
+    fnc add(int a, int b) => int;
+    String name;
+  end
 end
 
-define module math with MathModule as
+@AdheresTo(contracts.MathApi)
+define module math
   pub fnc add(int a, int b): int { return a + b; }
-  pub const String name = "math";
+  pub val String name = "math";
 end
 ```
 
-Only exported (`pub`) module members satisfy a module contract. Contract
-callables use the ordinary executable return spellings `: T` or `-> T`;
-the older fat-arrow spelling remains accepted for compatibility but is not
-canonical.
-
-Contract fields participate in conformance just like functions. An unqualified
-field such as `name: String;` requires a readable public field of that type
-regardless of whether the implementation stores it as `const`, `val`, or
-`let`. A qualified field is exact: `const name: String;`, `val name:
-String;`, and `let name: String;` require the corresponding implementation
-binding kind. This lets contracts express immutable versus mutable module data
-without making compiler metadata visible as ordinary members.
-
-Modules are first-class values through `Module<Contract>`. The wrapper is
-nominal—ordinary records/classes cannot masquerade as modules—while the public
-module surface is checked structurally against the requested contract:
-
-```ores
-fnc inspect(Module<MathModule> module): int {
-  return module.add(40, 2);
-}
-
-pub routine main(): void {
-  val List<Module<MathModule>> modules = [math];
-  for module of modules do
-    stdio.println(module.name);
-    stdio.println(inspect(module));
-  done
-  return;
-}
-```
-
-The same trait may be imported and applied by modules in different files.
-Named `import module` bindings retain their precise public module shape during
-linked compilation instead of degrading to `Unknown`, so passing an imported
-module as `Module<T>` is checked at compile time.
-
-`@AdheresTo(A, B)` remains a compatibility spelling for declared module
-conformance; new code should prefer `with A, B as`. A module value may also be
-validated structurally when it is used where a `Module<T>` is required even
-if it did not repeat the contract in its declaration.
-
-`Module<T>` does not grant ambient filesystem loading. Cross-file module
-resolution remains host/linker controlled. Trusted hosts that already possess
-`HOT_CODE_LOAD` may use `HotReloadManager.loadModule(..., requiredType)` to
-stage plugin/source code only after a real named module has been structurally
-proved assignable to the supplied `Module<T>` type. Contract failure happens
-before a generation is staged. The required type can be constructed from
-compiler metadata with `TypeChecker.moduleContractType(...)`. This is a host
-capability boundary, not a guest filesystem/reflection primitive; any future
-guest-facing dynamic loader must preserve the same rule.
+Only exported (`pub`) module members satisfy an adherence contract. `@AdheresTo(A, B)` may name more than one interface.
 
 ## Functions and returns
 
@@ -277,6 +226,63 @@ A bare `_` is a sequence discard pattern: it consumes that array/tuple position 
 `_` is not readable after the destructure because no lexical binding is created for it. A destructured `const` is an immutable runtime binding; unlike a standalone `const x = ...` declaration, the aggregate being destructured does not need to be a compile-time constant.
 
 Sequence destructuring requires a returned tuple or array/list. Finite tuples are checked for exact arity and per-position type. Object destructuring requires a record/map-like value and every requested key must exist. If the returned type is a union, destructuring is allowed only when every union alternative supports the requested pattern; each extracted binding receives the union of the corresponding alternative member types. Function-parameter destructuring is intentionally not part of this syntax yet.
+
+## Assignment, equality, and identity
+
+Assignment remains an expression. `lhs = rhs` mutates `lhs` and evaluates to
+the assigned value, including inside call arguments and control-flow expressions.
+Oreslang does **not** interpret `name = value` inside a call as a named argument.
+
+The canonical comparison operators deliberately separate value equality from identity:
+
+- `a eq b` is canonical value equality.
+- `a neq b` is canonical value inequality.
+- Adjacent `a !eq b` is an equivalent inequality spelling. Whitespace between
+  `!` and `eq` does not form this operator.
+- `a == b` and `a != b` remain accepted compatibility aliases, but canonical
+  Oreslang style prefers `eq` and `neq`.
+- `a is b` is identity: both operands must be identity-bearing reference/handle
+  values with overlapping runtime domains.
+- `!(a eq b)` is ordinary logical negation and is equivalent to value inequality.
+
+`eq`, `neq`, and `is` are reserved operator keywords rather than ordinary
+identifier names. This intentionally prevents visually hostile constructs such
+as `is is foo`. Keyword spellings may still appear after `.` because member
+names occupy a separate syntactic namespace.
+
+Value equality is defined by Oreslang semantics, never arbitrary host/JVM
+`equals()` behavior. Numbers compare numerically across compatible numeric
+representations; structural records/maps, tuples, arrays/lists, `Option`,
+`Result`, and iterator-result values recurse through their contents. Ordinary
+class/actor instances remain identity-equal by default unless a future explicit
+equality protocol is introduced. `switch` constants and literal match patterns
+use the same value-equality operation, so equality cannot change meaning between
+language constructs.
+
+Identity is likewise semantic rather than a promise about backend object boxing.
+Ordinary objects/reference collections use reference identity, while stable
+handles such as actor IDs/references compare the underlying handle identity.
+Scalars and value-semantic aggregates/wrappers are rejected for `is`.
+
+Because plain infix `is` owns identity, nominal expression type tests use an
+explicit `type` marker:
+
+```ores
+if animal is type Dog dog then
+  dog.bark();
+fi
+```
+
+Match-arm type patterns retain the compact prefix form because pattern position
+is unambiguous:
+
+```ores
+match animal
+  is Dog dog -> { dog.bark(); }
+  else -> { return; }
+end
+```
+
 
 ## Classes, receivers, multiple inheritance, and interfaces
 

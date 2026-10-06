@@ -3453,10 +3453,12 @@ public final class OresEvalRootNode extends RootNode {
                                 runtimeKind,
                                 normalized,
                                 (delivered, actorContext) ->
-                                        invoke(
-                                                functionBodyInvocation(
-                                                        fn,
-                                                        delivered)));
+                                        startSourceFunctionTask(
+                                                fn,
+                                                fn.async()
+                                                        ? detachAsyncArguments(
+                                                                delivered)
+                                                        : delivered));
 
                 return fn.async()
                         ? completion

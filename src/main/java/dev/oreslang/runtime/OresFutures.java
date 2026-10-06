@@ -1,6 +1,7 @@
 package dev.oreslang.runtime;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletionStage;
@@ -67,7 +68,9 @@ public final class OresFutures {
                                 T item = (T) values.get(i);
                                 ordered.add(item);
                             }
-                            result.completeFromRuntime(List.copyOf(ordered));
+                            // Void futures complete with null; preserve their
+                            // slots while keeping the aggregate immutable.
+                            result.completeFromRuntime(Collections.unmodifiableList(ordered));
                             detachWaiters.run();
                         }
                     });

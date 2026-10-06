@@ -10,6 +10,7 @@ import dev.oreslang.nodes.OresInteropRootNode;
 import dev.oreslang.runtime.ActorRuntime;
 import dev.oreslang.runtime.AsyncRuntime;
 import dev.oreslang.runtime.OresContext;
+import dev.oreslang.runtime.OresScheduler;
 import org.graalvm.polyglot.SandboxPolicy;
 
 import java.nio.file.InvalidPathException;
@@ -45,7 +46,8 @@ public final class OresLanguage extends TruffleLanguage<OresContext> {
     protected boolean isThreadAccessAllowed(Thread thread, boolean singleThreaded) {
         return singleThreaded
                 || ActorRuntime.isActorCarrierThread()
-                || AsyncRuntime.isAsyncCarrierThread();
+                || AsyncRuntime.isAsyncCarrierThread()
+                || OresScheduler.isSchedulerCarrierThread();
     }
 
     @Override

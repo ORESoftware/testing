@@ -2,6 +2,7 @@ package dev.oreslang.runtime;
 
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -28,7 +29,7 @@ public final class OresVM implements AutoCloseable {
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile StartupState startupState = StartupState.NEW;
 
-    private OresVM(int controlParallelism, OresScheduler.TurnExecutor turnExecutor) {
+    private OresVM(int controlParallelism, OresScheduler.TurnExecutor turnExecutor, Executor rootAdmission) {
         if (controlParallelism <= 0) {
             throw new IllegalArgumentException("control parallelism must be positive");
         }
@@ -50,8 +51,8 @@ public final class OresVM implements AutoCloseable {
 
         this.rootScheduler = OresScheduler.runtimeOwned(
                 "ores-root-scheduler",
-                controlParallelism,
-                controlExecutor,
+                rootAdmission == null ? controlParallelism : 1,
+                rootAdmission == null ? controlExecutor : rootAdmission,
                 turnExecutor);
         try {
             startup();
@@ -63,11 +64,16 @@ public final class OresVM implements AutoCloseable {
     }
 
     static OresVM create(OresScheduler.TurnExecutor turnExecutor) {
+        return create(turnExecutor, null);
+    }
+
+    static OresVM create(OresScheduler.TurnExecutor turnExecutor, Executor rootAdmission) {
         return new OresVM(
                 Integer.getInteger(
                         "ores.runtime.control.parallelism",
                         DEFAULT_CONTROL_PARALLELISM),
-                turnExecutor);
+                turnExecutor,
+                rootAdmission);
     }
 
     /**

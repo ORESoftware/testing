@@ -1564,6 +1564,23 @@ public final class TypeChecker {
                         typeOf(channelOp.value(), env, generics, self),
                         element,
                         "writech value");
+                if (channelOp.callback()) {
+                    if (channelOp.mode() != Ast.WaitMode.NONBLOCKING) {
+                        throw new IllegalArgumentException(
+                                "channel callbacks require nonblocking writech");
+                    }
+                    if (currentActorKind == Ast.ActorKind.NONE) {
+                        throw new IllegalArgumentException(
+                                "nb cb writech requires an actor execution domain because its callback runs later");
+                    }
+                    checkBlock(
+                            channelOp.callbackBody(),
+                            new Env(env),
+                            generics,
+                            Primitive.VOID,
+                            self);
+                    return Primitive.VOID;
+                }
                 return switch (channelOp.mode()) {
                     case BLOCKING -> Primitive.VOID;
                     case NONBLOCKING -> new Named("Future", List.of(Primitive.VOID));
@@ -1902,7 +1919,7 @@ public final class TypeChecker {
             return;
         }
         if (named.name().equals("SharedMutex")) {
-            if (actorKind == Ast.ActorKind.PRIVATE) {
+            if (actorKind == Ast.ActorKind.PRIVATE || actorKind == Ast.ActorKind.UNTRUSTED) {
                 throw new IllegalArgumentException(
                         where + " cannot use SharedMutex<T> with isoactor/private actors");
             }
@@ -3465,7 +3482,8 @@ public final class TypeChecker {
             case "Future" -> {
                 if (ref.inferArguments() || ref.arguments().size() != 1) throw new IllegalArgumentException("Future requires exactly one explicit type argument");
                 Type element = resolve(ref.arguments().getFirst(), generics, self);
-                if (element == Primitive.VOID) throw new IllegalArgumentException("Future<void> is invalid");
+                // Future<void> is the canonical completion type for nb writech.
+                // OresFuture supports a null terminal payload, so void is valid here.
                 yield new Named("Future", List.of(element));
             }
             case "SharedMutex" -> {

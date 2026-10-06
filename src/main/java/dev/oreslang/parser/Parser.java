@@ -1859,7 +1859,9 @@ public final class Parser {
                 && reservedCallableNameFollowedByInvocation(current)) {
             return new Ast.NameExpr(advance().lexeme());
         }
-        if (match(IDENT)) return new Ast.NameExpr(previous().lexeme());
+        if (match(IDENT, SHARED, UNTRUSTED)) {
+            return new Ast.NameExpr(previous().lexeme());
+        }
         if (match(NEW)) {
             Ast.TypeRef type = parseTypeRef();
             consume(LPAREN, "expected '(' after new type");

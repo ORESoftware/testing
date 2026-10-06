@@ -2356,10 +2356,14 @@ public final class ActorRuntime implements AutoCloseable {
     }
 
     private void unregisterActor(ActorCell<?> cell) {
+        // Keep the actor discoverable until all runtime-owned teardown that is
+        // part of its termination contract has completed. ActorRef.awaitTermination()
+        // treats absence from this map as terminal, so removing the actor first
+        // would let observers race ahead of creator-owned ActorGroup cleanup.
+        for (ActorGroup group : List.copyOf(actorGroups.values())) {
+            group.actorTerminated(cell.ref.id());
+        }
         if (actors.remove(cell.ref.id(), cell)) {
-            for (ActorGroup group : List.copyOf(actorGroups.values())) {
-                group.actorTerminated(cell.ref.id());
-            }
             int remaining = actorCount.decrementAndGet();
             if (remaining < 0) {
                 actorCount.incrementAndGet();

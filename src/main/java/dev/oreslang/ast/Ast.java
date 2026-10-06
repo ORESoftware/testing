@@ -220,7 +220,21 @@ public final class Ast {
         }
     }
 
-    public record InterfaceFieldDecl(String name, TypeRef type) implements InterfaceMember { }
+    /**
+     * Field/data requirement in an interface or trait.
+     *
+     * bindingKind == null means "readable field of this type" with no
+     * mutability/storage-strength requirement. When present, the implementation
+     * must expose the same binding kind (const/val/let).
+     */
+    public record InterfaceFieldDecl(
+            String name,
+            TypeRef type,
+            BindingKind bindingKind) implements InterfaceMember {
+        public InterfaceFieldDecl(String name, TypeRef type) {
+            this(name, type, null);
+        }
+    }
 
     /**
      * Shared contract declaration node for nominal interfaces and structural

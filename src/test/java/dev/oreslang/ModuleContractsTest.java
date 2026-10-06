@@ -226,6 +226,53 @@ final class ModuleContractsTest {
     }
 
     @Test
+    void contractFieldsCanRequireConstValOrLetBindings() {
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
+                pub define trait StatefulModule as
+                  const version: String;
+                  val label: String;
+                  let count: int;
+                end
+
+                define module Good with StatefulModule as
+                  pub const String version = "v1";
+                  pub val String label = "good";
+                  pub let int count = 0;
+                end
+                """)));
+
+        IllegalArgumentException wrongBinding = assertThrows(
+                IllegalArgumentException.class,
+                () -> TypeChecker.check(Parser.parse("""
+                        pub define trait VersionedModule as
+                          const version: String;
+                        end
+
+                        define module Broken with VersionedModule as
+                          pub val String version = "v1";
+                        end
+                        """)));
+        assertTrue(wrongBinding.getMessage().contains("does not adhere"));
+    }
+
+    @Test
+    void unqualifiedContractFieldsRequireReadabilityButNotABindingKind() {
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
+                pub define trait ReadableModule as
+                  value: String;
+                end
+
+                define module Mutable with ReadableModule as
+                  pub let String value = "mutable";
+                end
+
+                define module Constant with ReadableModule as
+                  pub const String value = "constant";
+                end
+                """)));
+    }
+
+    @Test
     void importedModuleValuesDoNotDegradeToUnknown() {
         IncrementalCompiler compiler = new IncrementalCompiler();
         Map<String, String> sources = new LinkedHashMap<>();

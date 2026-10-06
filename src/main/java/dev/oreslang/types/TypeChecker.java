@@ -342,6 +342,11 @@ public final class TypeChecker {
             } else if (decl instanceof Ast.FieldDecl field && field.visibility() == Ast.Visibility.PUBLIC) {
                 Type type = field.type() == null ? typeOf(field.initializer(), new Env(null), Set.of(), null) : resolve(field.type(), Set.of(), null);
                 mergeMember(members, field.name(), type, "module " + module.name());
+                mergeMember(
+                        members,
+                        fieldBindingContractKey(field.name()),
+                        fieldBindingContractType(field.bindingKind()),
+                        "module " + module.name());
             }
         }
         return new Record(members);
@@ -2954,7 +2959,14 @@ public final class TypeChecker {
         }
         Set<String> generics = Set.copyOf(klass.genericParameters());
         Type self = nominalClassType(klass);
-        for (Ast.FieldDecl field : klass.fields()) mergeMember(members, field.name(), classFieldType(klass, field), "class " + klass.name());
+        for (Ast.FieldDecl field : klass.fields()) {
+            mergeMember(members, field.name(), classFieldType(klass, field), "class " + klass.name());
+            mergeMember(
+                    members,
+                    fieldBindingContractKey(field.name()),
+                    fieldBindingContractType(field.bindingKind()),
+                    "class " + klass.name());
+        }
         for (Ast.MethodDecl method : klass.methods()) {
             if (method.isStatic()) continue;
             mergeMember(members,
@@ -2984,7 +2996,14 @@ public final class TypeChecker {
         Set<String> generics = Set.copyOf(klass.genericParameters());
         Type self = nominalClassType(klass);
         for (Ast.FieldDecl field : klass.fields()) {
-            if (field.visibility() == Ast.Visibility.PUBLIC) mergeMember(members, field.name(), classFieldType(klass, field), "class " + klass.name());
+            if (field.visibility() == Ast.Visibility.PUBLIC) {
+                mergeMember(members, field.name(), classFieldType(klass, field), "class " + klass.name());
+                mergeMember(
+                        members,
+                        fieldBindingContractKey(field.name()),
+                        fieldBindingContractType(field.bindingKind()),
+                        "class " + klass.name());
+            }
         }
         for (Ast.MethodDecl method : klass.methods()) {
             if (!method.isStatic() && method.visibility() == Ast.Visibility.PUBLIC) {
@@ -3023,6 +3042,13 @@ public final class TypeChecker {
                         "interface " + iface.name());
             } else if (member instanceof Ast.InterfaceFieldDecl field) {
                 mergeMember(members, field.name(), resolve(field.type(), generics, null), "interface " + iface.name());
+                if (field.bindingKind() != null) {
+                    mergeMember(
+                            members,
+                            fieldBindingContractKey(field.name()),
+                            fieldBindingContractType(field.bindingKind()),
+                            "interface " + iface.name());
+                }
             }
         }
         stack.remove(iface);
@@ -4350,6 +4376,46 @@ public final class TypeChecker {
 
     private String methodContractKey(String name, int arity, int genericArity) {
         return CallableSelector.instance(name, arity).contractKey(genericArity);
+    }
+
+    /**
+     * Compiler-only structural member key. '
+
+
+
+    private static final class Env {
+        private final Env parent;
+        private final boolean descendantsNonLexical;
+        private final Map<String, Binding> bindings = new HashMap<>();
+        private Env(Env parent) { this(parent, parent != null && parent.descendantsNonLexical); }
+        private Env(Env parent, boolean descendantsNonLexical) {
+            this.parent = parent;
+            this.descendantsNonLexical = descendantsNonLexical;
+        }
+        private boolean descendantsNonLexical() { return descendantsNonLexical; }
+        private void define(String name, Type type, Ast.BindingKind kind) {
+            if (bindings.putIfAbsent(name, new Binding(type, kind)) != null) throw new IllegalArgumentException("duplicate binding '" + name + "'");
+        }
+        private Binding lookup(String name) {
+            Binding binding = bindings.get(name);
+            return binding != null ? binding : parent == null ? null : parent.lookup(name);
+        }
+        private void replace(String name, Type type, Ast.BindingKind kind) {
+            if (!bindings.containsKey(name)) throw new IllegalArgumentException("unknown binding '" + name + "'");
+            bindings.put(name, new Binding(type, kind));
+        }
+        private record Binding(Type type, Ast.BindingKind kind) { }
+    }
+}
+ is not a legal source
+     * identifier character, so this metadata cannot collide with a user field.
+     */
+    private String fieldBindingContractKey(String name) {
+        return "$field-binding$" + name;
+    }
+
+    private Type fieldBindingContractType(Ast.BindingKind kind) {
+        return new Named("$BindingKind", List.of(new StringLiteral(kind.name())));
     }
 
 

@@ -398,20 +398,22 @@ public final class Parser {
                 continue;
             }
 
+            Ast.BindingKind fieldBindingKind =
+                    isBindingKind(peek().type()) ? parseBindingKind() : null;
+
             if (check(IDENT) && checkNext(COLON)) {
                 String fieldName = advance().lexeme();
                 consume(COLON, "expected ':' after " + label + " field name");
                 Ast.TypeRef type = parseTypeRef();
                 consumeMemberTerminator(terminator, label + " field signature should end with ';'");
-                members.add(new Ast.InterfaceFieldDecl(fieldName, type));
+                members.add(new Ast.InterfaceFieldDecl(fieldName, type, fieldBindingKind));
                 continue;
             }
 
-            if (isBindingKind(peek().type())) advance();
             Ast.TypeRef type = parseTypeRef();
             String fieldName = consume(IDENT, "expected " + label + " field name").lexeme();
             consumeMemberTerminator(terminator, label + " field signature should end with ';'");
-            members.add(new Ast.InterfaceFieldDecl(fieldName, type));
+            members.add(new Ast.InterfaceFieldDecl(fieldName, type, fieldBindingKind));
         }
 
         consume(terminator, braceStyle

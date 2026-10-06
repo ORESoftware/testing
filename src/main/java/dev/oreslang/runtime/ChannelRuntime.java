@@ -134,6 +134,29 @@ public final class ChannelRuntime {
         }
 
         /**
+         * Runtime-only mailbox shutdown drain. Unlike the guest-visible
+         * immediate probe, a closed-and-empty channel is a normal terminal
+         * condition and therefore returns false rather than throwing.
+         *
+         * <p>This method is deliberately package-private: guest code can never
+         * use shutdown drainage to distinguish an actor mailbox from an ordinary
+         * channel.</p>
+         */
+        boolean drainOne(java.util.function.Consumer<? super T> consumer) {
+            Objects.requireNonNull(consumer, "consumer");
+            T value;
+            synchronized (this) {
+                if (buffer.isEmpty()) return false;
+                value = buffer.removeFirst();
+                // A mailbox uses tryWrite/admission, so committed values are
+                // already in the buffer; no pending guest writer is part of
+                // this shutdown drain path.
+            }
+            consumer.accept(value);
+            return true;
+        }
+
+        /**
          * Scheduler-friendly receive registration.
          */
         public OresFuture<T> readAsync() {

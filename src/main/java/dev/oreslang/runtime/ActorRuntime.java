@@ -148,6 +148,55 @@ public final class ActorRuntime implements AutoCloseable {
      */
     public enum CancellationMode { STRUCTURED, FORCE_ISOLATED }
 
+    public record IsolationTarget(
+            ActorId actorId,
+            Object executionDomain) {
+        public IsolationTarget {
+            Objects.requireNonNull(actorId, "actorId");
+            Objects.requireNonNull(executionDomain, "executionDomain");
+        }
+    }
+
+    public record ForceCancellationRequest(
+            ActorId rootActorId,
+            List<IsolationTarget> targets) {
+        public ForceCancellationRequest {
+            Objects.requireNonNull(rootActorId, "rootActorId");
+            targets = List.copyOf(
+                    Objects.requireNonNull(targets, "targets"));
+            if (targets.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "force-cancellation target set cannot be empty");
+            }
+        }
+    }
+
+    @FunctionalInterface
+    public interface ForceCancellationHook {
+        /**
+         * Returning true means every target was atomically revoked and is no
+         * longer capable of executing guest code. Returning false or throwing
+         * means no logical force-cancellation is published.
+         */
+        boolean revoke(ForceCancellationRequest request);
+    }
+
+    private final class ForceCancellationAttempt {
+        private final ActorCell<?> root;
+        private final List<ActorCell<?>> cells;
+        private final ForceCancellationRequest request;
+
+        private ForceCancellationAttempt(
+                ActorCell<?> root,
+                List<ActorCell<?>> cells,
+                ForceCancellationRequest request) {
+            this.root = root;
+            this.cells = List.copyOf(cells);
+            this.request = request;
+        }
+    }
+
+
     public static final class ActorCancelledException extends CancellationException {
         private final ActorId actorId;
 

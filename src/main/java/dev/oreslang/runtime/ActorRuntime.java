@@ -935,6 +935,42 @@ public final class ActorRuntime implements AutoCloseable {
     }
 
     /**
+     * Bind a runtime Future to the current actor lifetime. Outside an actor
+     * turn the Future remains independently owned by its caller.
+     */
+    public <T> OresFuture<T> ownCurrentActorFuture(OresFuture<T> future) {
+        Objects.requireNonNull(future, "future");
+        ActorCell<?> cell = currentActor.get();
+        if (cell == null) return future;
+
+        if (!ownFuture(cell, future)) {
+            return future;
+        }
+        return future;
+    }
+
+    private boolean ownFuture(
+            ActorCell<?> cell,
+            OresFuture<?> future) {
+        if (cell.stopped.get() || cell.finalized || closed.get()) {
+            future.cancel(false);
+            return false;
+        }
+
+        cell.pendingContinuations.add(future);
+        if (cell.stopped.get() || cell.finalized || closed.get()) {
+            cell.pendingContinuations.remove(future);
+            future.cancel(false);
+            return false;
+        }
+
+        future.whenCompleteRuntime(
+                (ignored, failure) ->
+                        cell.pendingContinuations.remove(future));
+        return true;
+    }
+
+    /**
      * Register scheduler plumbing only. Future completion enqueues the supplied
      * continuation back to the captured actor; the callback body itself is not
      * run on the producer/completion thread.
@@ -948,22 +984,11 @@ public final class ActorRuntime implements AutoCloseable {
         Objects.requireNonNull(continuation, "continuation");
 
         ActorCell<?> cell = actors.get(target.actorId());
-        if (cell == null || cell.stopped.get()) {
-            future.cancel(false);
-            return;
-        }
+        if (cell == null || !ownFuture(cell, future)) return;
 
-        cell.pendingContinuations.add(future);
-        if (cell.stopped.get()) {
-            cell.pendingContinuations.remove(future);
-            future.cancel(false);
-            return;
-        }
-
-        future.whenCompleteRuntime((value, failure) -> {
-            cell.pendingContinuations.remove(future);
-            target.enqueue(() -> continuation.accept(value, failure));
-        });
+        future.whenCompleteRuntime(
+                (value, failure) ->
+                        target.enqueue(() -> continuation.accept(value, failure)));
     }
 
     private boolean enqueueContinuation(ActorId actorId, Runnable continuation) {

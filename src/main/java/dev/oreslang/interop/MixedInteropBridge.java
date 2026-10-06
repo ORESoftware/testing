@@ -18,6 +18,12 @@ public final class MixedInteropBridge {
 
     private MixedInteropBridge() { }
 
+    /** Immutable linkage scope carried across logical scheduler turns. */
+    public static Map<String, Invoker> capture() {
+        Map<String, Invoker> current = CURRENT.get();
+        return current == null ? Map.of() : current;
+    }
+
     public static Scope open(Map<String, Invoker> invokers) {
         Map<String, Invoker> next = Map.copyOf(new LinkedHashMap<>(invokers));
         Map<String, Invoker> previous = CURRENT.get();

@@ -7,7 +7,7 @@ import java.util.Objects;
 public final class Types {
     private Types() { }
 
-    public sealed interface Type permits Primitive, Named, Borrow, ClassNamespace, Record, Function, ListType, Tuple, Union, Generic, StringLiteral, Unknown { }
+    public sealed interface Type permits Primitive, Named, SelfType, Borrow, ClassNamespace, Record, Function, ListType, Tuple, Union, Generic, StringLiteral, Unknown { }
 
     public enum Primitive implements Type {
         INT, FLOAT, DECIMAL, COMPLEX, BOOL, STRING, VOID, NULL
@@ -15,6 +15,19 @@ public final class Types {
 
     public record Named(String name, List<Type> arguments) implements Type {
         public Named { arguments = List.copyOf(arguments); }
+    }
+
+    /**
+     * Receiver-polymorphic type carried by the implicit instance receiver.
+     *
+     * <p>The bound is the nominal type whose members are available while checking
+     * the method body. A SelfType value may widen to that nominal type, but a
+     * fresh value of the nominal type cannot narrow back to SelfType because the
+     * actual receiver may be a more-derived subtype. Values already proven to
+     * have the receiver-polymorphic self type may flow through aliases/parameters.
+     */
+    public record SelfType(Type bound) implements Type {
+        public SelfType { Objects.requireNonNull(bound, "self bound"); }
     }
 
     /** Rust-style compile-time borrow; erased by the interpreter runtime. */
@@ -27,14 +40,47 @@ public final class Types {
         public Record { members = Map.copyOf(members); }
     }
 
-    public record Function(List<Type> parameters, Type result) implements Type {
-        public Function { parameters = List.copyOf(parameters); }
+    public record Function(
+            List<Type> parameters,
+            List<Boolean> mutableParameters,
+            boolean async,
+            Type result) implements Type {
+        public Function {
+            parameters = List.copyOf(parameters);
+            mutableParameters = List.copyOf(mutableParameters);
+            if (parameters.size() != mutableParameters.size()) {
+                throw new IllegalArgumentException(
+                        "function parameter mutability metadata must match parameter arity");
+            }
+        }
+
+        /**
+         * Source-level Fnc<...> types and built-in callables have no mutable
+         * parameters and are synchronous unless a declaration explicitly says
+         * otherwise.
+         */
+        public Function(List<Type> parameters, Type result) {
+            this(parameters, java.util.Collections.nCopies(parameters.size(), false), false, result);
+        }
     }
 
     public record ListType(Type element) implements Type { }
 
-    public record Tuple(List<Type> elements) implements Type {
-        public Tuple { elements = List.copyOf(elements); }
+    public enum TupleKind {
+        TUPLE,
+        FIXED_ARRAY,
+        FIXED_LIST
+    }
+
+    public record Tuple(List<Type> elements, TupleKind kind) implements Type {
+        public Tuple {
+            elements = List.copyOf(elements);
+            kind = Objects.requireNonNull(kind, "kind");
+        }
+
+        public Tuple(List<Type> elements) {
+            this(elements, TupleKind.TUPLE);
+        }
     }
 
     public record Union(List<Type> options) implements Type {
@@ -56,6 +102,15 @@ public final class Types {
         if (from == Unknown.INSTANCE || to == Unknown.INSTANCE) return true;
         if (to instanceof Generic || from instanceof Generic) return true;
         if (from.equals(to)) return true;
+        if (from instanceof SelfType source) {
+            if (to instanceof SelfType target) {
+                return isAssignable(source.bound(), target.bound())
+                        && isAssignable(target.bound(), source.bound());
+            }
+            return isAssignable(source.bound(), to);
+        }
+        // A nominal base value cannot manufacture the receiver-polymorphic proof.
+        if (to instanceof SelfType) return false;
         if (from instanceof StringLiteral && to == Primitive.STRING) return true;
 
         if (from instanceof Union source) {
@@ -92,6 +147,7 @@ public final class Types {
         }
 
         if (from instanceof Tuple source && to instanceof Tuple target) {
+            if (source.kind() != target.kind()) return false;
             if (source.elements().size() != target.elements().size()) return false;
             for (int i = 0; i < source.elements().size(); i++) {
                 if (!isAssignable(source.elements().get(i), target.elements().get(i))) return false;
@@ -101,6 +157,11 @@ public final class Types {
 
         if (from instanceof Function source && to instanceof Function target) {
             if (source.parameters().size() != target.parameters().size()) return false;
+            if (source.async() != target.async()) return false;
+            // Parameter mutation authority is part of the callable contract.
+            // Keep it invariant: callers and implementations must agree exactly
+            // on which arguments may be mutated.
+            if (!source.mutableParameters().equals(target.mutableParameters())) return false;
             for (int i = 0; i < source.parameters().size(); i++) {
                 if (!isAssignable(target.parameters().get(i), source.parameters().get(i))) return false;
             }

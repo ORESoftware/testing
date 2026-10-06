@@ -3,8 +3,6 @@ package dev.oreslang.compiler;
 import dev.oreslang.ast.AnnotationExpander;
 import dev.oreslang.ast.Ast;
 import dev.oreslang.parser.Parser;
-import dev.oreslang.types.TypeChecker;
-import dev.oreslang.types.Types.ModuleType;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -106,33 +104,7 @@ public final class IncrementalCompiler {
                 continue;
             }
 
-            Map<String, Ast.InterfaceDecl> importedInterfaces =
-                    ImportGraph.resolveImportedInterfaces(id, parsed, normalizedImportResolutions);
-
-            Map<String, ImportGraph.ResolvedModuleImport> importedModules =
-                    ImportGraph.resolveImportedModules(id, parsed, normalizedImportResolutions);
-            LinkedHashMap<String, ModuleType> importedModuleTypes = new LinkedHashMap<>();
-            for (Map.Entry<String, ImportGraph.ResolvedModuleImport> entry : importedModules.entrySet()) {
-                ImportGraph.ResolvedModuleImport resolved = entry.getValue();
-                Ast.Program provider = parsed.get(resolved.targetUnitId());
-                if (provider == null) {
-                    throw new IllegalArgumentException(
-                            "imported module provider was not supplied: '" + resolved.targetUnitId() + "'");
-                }
-                Map<String, Ast.InterfaceDecl> providerContracts =
-                        ImportGraph.resolveImportedInterfaces(
-                                resolved.targetUnitId(), parsed, normalizedImportResolutions);
-                ModuleType moduleType = TypeChecker.exportedModuleType(
-                        provider, providerContracts, resolved.module().name());
-                ModuleType previous = importedModuleTypes.putIfAbsent(entry.getKey(), moduleType);
-                if (previous != null && !previous.equals(moduleType)) {
-                    throw new IllegalArgumentException(
-                            "imported module type binding '" + entry.getKey() + "' is ambiguous in '" + id + "'");
-                }
-            }
-
-            Ast.Program checked = TypeChecker.check(
-                    parsed.get(id), importedInterfaces, Map.copyOf(importedModuleTypes));
+            Ast.Program checked = OresCompiler.parseAndTypeCheck(normalized.get(id));
             CompiledUnit unit = new CompiledUnit(
                     id,
                     packageId(id, checked),
@@ -165,9 +137,6 @@ public final class IncrementalCompiler {
 
         for (Ast.ModuleDecl module : program.modules()) {
             abi.append("module ").append(module.name()).append('\n');
-            for (Ast.TypeRef contract : module.contracts()) {
-                abi.append(" module-contract ").append(typeRef(contract)).append('\n');
-            }
             for (Ast.Annotation annotation : module.annotations()) {
                 if (annotation.name().equals("AdheresTo")) {
                     abi.append(" module-annotation AdheresTo:");
@@ -222,8 +191,7 @@ public final class IncrementalCompiler {
             return;
         }
         if (decl instanceof Ast.InterfaceDecl iface) {
-            abi.append(iface.contractKind() == Ast.ContractKind.TRAIT ? "trait " : "interface ")
-                    .append(iface.visibility()).append(' ').append(iface.name());
+            abi.append("interface ").append(iface.visibility()).append(' ').append(iface.name());
             appendGenerics(abi, iface.genericParameters());
             abi.append(" extends ");
             for (Ast.TypeRef parent : iface.parents()) abi.append(typeRef(parent)).append(',');
@@ -233,9 +201,7 @@ public final class IncrementalCompiler {
                 if (member instanceof Ast.InterfaceFunctionDecl fn) {
                     memberEntries.add(interfaceFunctionAbi(fn));
                 } else if (member instanceof Ast.InterfaceFieldDecl field) {
-                    memberEntries.add(" iface-field "
-                            + (field.bindingKind() == null ? "" : field.bindingKind().name().toLowerCase() + " ")
-                            + field.name() + ":" + typeRef(field.type()) + "\n");
+                    memberEntries.add(" iface-field " + field.name() + ":" + typeRef(field.type()) + "\n");
                 }
             }
             memberEntries.stream().sorted().forEach(abi::append);

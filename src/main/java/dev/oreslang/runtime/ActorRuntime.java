@@ -397,6 +397,19 @@ public final class ActorRuntime implements AutoCloseable {
     }
 
     public int actorCount() { return actorCount.get(); }
+
+    /** Package-private proof hook: mailbox transport is the runtime Channel<T>. */
+    boolean mailboxUsesChannelTransport(ActorRef<?> ref) {
+        requireSupervisorContext("inspect mailbox transport");
+        Objects.requireNonNull(ref, "ref");
+        if (!ref.ownedBy(this)) {
+            throw new IllegalArgumentException(
+                    "ActorRef belongs to a different ActorRuntime");
+        }
+        ActorCell<?> cell = actors.get(ref.id());
+        return cell != null && cell.mailbox instanceof ChannelRuntime.Channel<?>;
+    }
+
     public long privateMemoryBytes() { return privateMemoryBytes.get(); }
     public long sharedMemoryBytes() { return sharedMemoryBytes.get(); }
     public long actorMemoryBytes() { return privateMemoryBytes.get() + sharedMemoryBytes.get(); }

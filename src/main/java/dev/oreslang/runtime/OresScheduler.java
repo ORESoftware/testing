@@ -332,7 +332,8 @@ public final class OresScheduler implements AutoCloseable {
         }
     }
 
-    private void executeTurn(Runnable turn, Runnable afterTurn) {
+    private void executeTurn(Runnable turn, Runnable afterTurn,
+            java.util.function.Consumer<Throwable> admissionFailure) {
         Objects.requireNonNull(turn, "turn");
         Objects.requireNonNull(afterTurn, "afterTurn");
         ensureOpen();
@@ -341,6 +342,13 @@ public final class OresScheduler implements AutoCloseable {
             SCHEDULER_CARRIER.set(Boolean.TRUE);
             try {
                 turnExecutor.execute(() -> runBound(turn));
+            } catch (RuntimeException | Error failure) {
+                // Context admission can fail before runTurn starts. Settle the
+                // owning task instead of leaving the host waiting forever.
+                admissionFailure.accept(failure);
+                if (failure instanceof VirtualMachineError fatal) throw fatal;
+                if (failure instanceof ThreadDeath fatal) throw fatal;
+                if (failure instanceof LinkageError fatal) throw fatal;
             } finally {
                 if (priorCarrier) {
                     SCHEDULER_CARRIER.set(Boolean.TRUE);
@@ -398,6 +406,8 @@ public final class OresScheduler implements AutoCloseable {
         private static final int TERMINAL = 4;
 
         private final Task<T> task;
+        private final java.util.Map<String, dev.oreslang.interop.MixedInteropBridge.Invoker>
+                interopScope = dev.oreslang.interop.MixedInteropBridge.capture();
         private final AtomicInteger phase = new AtomicInteger(NEW);
         private final AtomicBoolean executing = new AtomicBoolean();
         private final AtomicReference<Resume> pendingResume =
@@ -422,7 +432,11 @@ public final class OresScheduler implements AutoCloseable {
 
         private void enqueueTurn() {
             try {
-                executeTurn(this::runTurn, this::afterCarrierTurn);
+                executeTurn(() -> {
+                    try (var scope = dev.oreslang.interop.MixedInteropBridge.open(interopScope)) {
+                        runTurn();
+                    }
+                }, this::afterCarrierTurn, this::failTerminal);
             } catch (RuntimeException | Error rejected) {
                 failTerminal(rejected);
                 throw rejected;

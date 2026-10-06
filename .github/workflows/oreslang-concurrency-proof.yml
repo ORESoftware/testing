@@ -1,0 +1,27 @@
+name: Oreslang concurrency contract proof
+
+on:
+  push:
+    branches:
+      - proof/oreslang-source-concurrency-contract-20261006
+  workflow_dispatch:
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Compile
+        working-directory: source
+        run: mvn -B -Dores.runtime.carriers=java -DskipTests test-compile
+      - name: Scheduler and channel proof
+        working-directory: source
+        run: mvn -B -Dores.runtime.carriers=java -Dtest=OresVMTest,OresSchedulerTest,ChannelRuntimeTest,OresFutureCallbackTest,ConcurrencyContractProofTest,ChannelSelectSyntaxTest test
+      - name: Actor, group, hungry, and security proof
+        working-directory: source
+        run: mvn -B -Dores.runtime.carriers=java -Dtest=ActorEventBusTest,ActorStructuredCancellationTest,HungryActorTest,SharedPrivateActorIsolationProofTest,UntrustedActorTest test

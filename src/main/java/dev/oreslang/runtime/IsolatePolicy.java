@@ -35,8 +35,11 @@ public record IsolatePolicy(
         PROCESS_INFO,
         GC_CONTROL,
         ACTOR_SHARE_READONLY,
+        ACTOR_SPAWN,
         SHARED_MEMORY,
         NETWORK,
+        IPC,
+        GPU,
         FILESYSTEM_READ,
         FILESYSTEM_WRITE,
         ENVIRONMENT,
@@ -79,11 +82,25 @@ public record IsolatePolicy(
         return new IsolatePolicy(Set.of(Capability.STDOUT), 128L * 1024 * 1024, 1024, Duration.ofSeconds(30), true);
     }
 
+    /**
+     * Fixed baseline for hostile hot-loaded actor code. The supervisor owns
+     * loading and routing; an untrusted actor starts with no ambient capabilities.
+     */
+    public static IsolatePolicy untrustedActor() {
+        return new IsolatePolicy(
+                Set.of(),
+                32L * 1024 * 1024,
+                128,
+                Duration.ofMillis(250),
+                true);
+    }
+
     /** Restricted local/test baseline. Java interop/FFI/native/reflection/process spawning remain denied. */
     public static IsolatePolicy developer() {
         return new IsolatePolicy(
                 Set.of(Capability.STDIN, Capability.STDOUT, Capability.PROCESS_INFO, Capability.GC_CONTROL,
-                        Capability.ACTOR_SHARE_READONLY, Capability.SHARED_MEMORY, Capability.HOT_CODE_LOAD),
+                        Capability.ACTOR_SHARE_READONLY, Capability.ACTOR_SPAWN,
+                        Capability.SHARED_MEMORY, Capability.HOT_CODE_LOAD),
                 512L * 1024 * 1024, 8192, Duration.ofMinutes(10), false);
     }
 

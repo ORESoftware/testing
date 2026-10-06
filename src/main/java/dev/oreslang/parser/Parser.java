@@ -1519,8 +1519,7 @@ public final class Parser {
                 && tokens.get(current).type() == PIPE
                 && tokens.get(current + 1).type() == PIPE
                 && tokens.get(current + 2).type() == ARROW
-                && adjacent(tokens.get(current), tokens.get(current + 1))
-                && adjacent(tokens.get(current + 1), tokens.get(current + 2));
+                && adjacent(tokens.get(current), tokens.get(current + 1));
     }
 
     private Ast.Expr parseLogicalXor() {
@@ -1537,7 +1536,9 @@ public final class Parser {
 
     private Ast.Expr parseBitwiseOr() {
         Ast.Expr expr = parseBitwiseXor();
-        while (matchSingleOperator(PIPE)) expr = new Ast.BinaryExpr("|", expr, parseBitwiseXor());
+        while (!isChannelCallbackDelimiter() && matchSingleOperator(PIPE)) {
+            expr = new Ast.BinaryExpr("|", expr, parseBitwiseXor());
+        }
         return expr;
     }
 

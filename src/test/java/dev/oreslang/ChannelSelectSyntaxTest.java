@@ -35,7 +35,7 @@ final class ChannelSelectSyntaxTest {
                 actor fnc nonblocking(): void {
                   val Channel<string> incoming = Channel.new<string>(1);
                   val Channel<string> payload = Channel.new<string>(1);
-                  val Channel<bool> done = Channel.new<bool>(1);
+                  val Channel<bool> finished = Channel.new<bool>(1);
 
                   nb select {
                   case readch incoming: let msg

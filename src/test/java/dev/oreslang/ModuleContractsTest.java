@@ -274,6 +274,32 @@ final class ModuleContractsTest {
     }
 
     @Test
+    void moduleContractShapesHonorNestedNominalInterfaceRelationships() {
+        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
+                pub define interface Named as
+                  name: String;
+                end
+
+                define class User implements Named as
+                  pub val String name;
+                end
+
+                pub define trait UserModule as
+                  current: Named;
+                  fnc identity(Named value): Named;
+                end
+
+                define module Users with UserModule as
+                  pub val User current = new User("alex");
+
+                  pub fnc identity(Named value): User {
+                    return current;
+                  }
+                end
+                """)));
+    }
+
+    @Test
     void hotLoaderCanRequireAnExternalModuleContractBeforeStaging() {
         var contractProgram = TypeChecker.check(Parser.parse("""
                 pub define trait PluginModule as

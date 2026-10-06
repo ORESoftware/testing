@@ -4257,6 +4257,60 @@ public final class TypeChecker {
         if (expected instanceof Union target) {
             return target.options().stream().anyMatch(option -> assignable(actual, option));
         }
+
+        // Structural/module recursion must stay inside the full checker rather
+        // than dropping to Types.isAssignable, otherwise nested nominal
+        // relationships (for example Concrete implements Contract inside a
+        // module field or callable signature) are lost.
+        if (actual instanceof ModuleType sourceModule
+                && expected instanceof ModuleType targetModule) {
+            return assignable(sourceModule.shape(), targetModule.shape());
+        }
+        if (actual instanceof ModuleType || expected instanceof ModuleType) return false;
+
+        if (actual instanceof Record sourceRecord && expected instanceof Record targetRecord) {
+            for (Map.Entry<String, Type> required : targetRecord.members().entrySet()) {
+                Type provided = sourceRecord.members().get(required.getKey());
+                if (provided == null || !assignable(provided, required.getValue())) return false;
+            }
+            return true;
+        }
+
+        if (actual instanceof Function sourceFunction && expected instanceof Function targetFunction) {
+            if (sourceFunction.parameters().size() != targetFunction.parameters().size()) return false;
+            for (int i = 0; i < sourceFunction.parameters().size(); i++) {
+                // Function parameters are contravariant.
+                if (!assignable(
+                        targetFunction.parameters().get(i),
+                        sourceFunction.parameters().get(i))) {
+                    return false;
+                }
+            }
+            return assignable(sourceFunction.result(), targetFunction.result());
+        }
+
+        if (actual instanceof ListType sourceList && expected instanceof ListType targetList) {
+            // Mutable collection element types remain invariant.
+            return assignable(sourceList.element(), targetList.element())
+                    && assignable(targetList.element(), sourceList.element());
+        }
+
+        if (actual instanceof Tuple sourceTuple && expected instanceof Tuple targetTuple) {
+            if (sourceTuple.elements().size() != targetTuple.elements().size()) return false;
+            for (int i = 0; i < sourceTuple.elements().size(); i++) {
+                if (!assignable(sourceTuple.elements().get(i), targetTuple.elements().get(i))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        if (actual instanceof Borrow sourceBorrow && expected instanceof Borrow targetBorrow) {
+            if (targetBorrow.mutable() && !sourceBorrow.mutable()) return false;
+            return assignable(sourceBorrow.target(), targetBorrow.target())
+                    && assignable(targetBorrow.target(), sourceBorrow.target());
+        }
+
         if (Types.isAssignable(actual, expected)) return true;
 
         if (actual instanceof Named actualNamed && expected instanceof Record targetShape) {
@@ -4265,7 +4319,7 @@ public final class TypeChecker {
             Type specializedShape = substituteGenerics(
                     publicClassShape(klass, new LinkedHashSet<>()),
                     classGenericBindings(klass, actualNamed));
-            return Types.isAssignable(specializedShape, targetShape);
+            return assignable(specializedShape, targetShape);
         }
 
         if (actual instanceof Named actualNamed && expected instanceof Named expectedNamed) {

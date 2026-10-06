@@ -172,9 +172,8 @@ final class AsyncAwaitLanguageTest {
 
                   async fnc wait(Channel<int> input): int {
                     select {
-                      case readch input: let value {
-                        return value;
-                      }
+                      case readch input: let value;
+                      return value;
                     }
                   }
 

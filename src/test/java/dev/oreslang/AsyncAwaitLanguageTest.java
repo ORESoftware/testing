@@ -127,16 +127,16 @@ final class AsyncAwaitLanguageTest {
     void pendingRendezvousChannelReadAndWriteResumeThroughSourceTasks() throws Exception {
         String program = """
                 define module app
-                  let Channel<int> output = Channel.new<int>(0);
+                  pub let Channel<int> output = Channel.new<int>(0);
 
                   pub async actor fnc producer(): void {
-                    writech output, 42;
+                    writech app.output, 42;
                     return;
                   }
 
                   pub fnc main(): void {
                     val producer_done = producer();
-                    val value = readch output;
+                    val value = readch app.output;
                     await producer_done;
                     stdio.println(value);
                     return;
@@ -166,16 +166,16 @@ final class AsyncAwaitLanguageTest {
     void pendingStaticSelectResumesOnlyAfterWinningChannelRegistration() throws Exception {
         String program = """
                 define module app
-                  let Channel<int> input = Channel.new<int>(0);
+                  pub let Channel<int> input = Channel.new<int>(0);
 
                   pub async actor fnc producer(): void {
-                    writech input, 73;
+                    writech app.input, 73;
                     return;
                   }
 
                   async fnc wait(): int {
                     select {
-                      case readch input: let value
+                      case readch app.input: let value
                         return value;
                     }
                     return 0;

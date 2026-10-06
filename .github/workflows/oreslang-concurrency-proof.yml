@@ -17,11 +17,11 @@ jobs:
           distribution: temurin
           java-version: "21"
       - name: Compile
-        working-directory: source
+        working-directory: .
         run: mvn -B -Dores.runtime.carriers=java -DskipTests test-compile
       - name: Scheduler and channel proof
-        working-directory: source
+        working-directory: .
         run: mvn -B -Dores.runtime.carriers=java -Dtest=OresVMTest,OresSchedulerTest,ChannelRuntimeTest,OresFutureCallbackTest,ConcurrencyContractProofTest,ChannelSelectSyntaxTest test
       - name: Actor, group, hungry, and security proof
-        working-directory: source
+        working-directory: .
         run: mvn -B -Dores.runtime.carriers=java -Dtest=ActorEventBusTest,ActorStructuredCancellationTest,HungryActorTest,SharedPrivateActorIsolationProofTest,UntrustedActorTest test

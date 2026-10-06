@@ -115,6 +115,93 @@ public final class TypeChecker {
         return checker.moduleType(module);
     }
 
+    /**
+     * Builds the first-class Module<Contract> type represented by a visible
+     * interface/trait reference. This is a trusted compiler/host API used by
+     * contract-aware loaders; it grants no runtime or filesystem authority.
+     */
+    public static ModuleType moduleContractType(
+            Ast.Program program,
+            Map<String, Ast.InterfaceDecl> importedInterfaces,
+            Ast.TypeRef contractRef) {
+        if (contractRef == null) throw new IllegalArgumentException("module contract reference cannot be null");
+        program = AnnotationExpander.expand(program);
+        TypeChecker checker = new TypeChecker();
+        checker.validateImports(program);
+        checker.collectImportedInterfaces(importedInterfaces);
+        checker.collect(program);
+
+        Ast.InterfaceDecl iface = checker.findInterface(contractRef.name());
+        if (iface == null) {
+            throw new IllegalArgumentException(
+                    "unknown module contract '" + contractRef.name() + "'");
+        }
+        Type resolved = checker.resolve(contractRef, Set.of(), null);
+        if (!(resolved instanceof Named named)) {
+            throw new IllegalArgumentException(
+                    "module contract must resolve to a named interface/trait type");
+        }
+        Record template = checker.interfaceShape(
+                iface,
+                Set.copyOf(iface.genericParameters()),
+                new LinkedHashSet<>());
+        Record expected = (Record) checker.substituteGenerics(
+                template,
+                checker.genericBindings(
+                        iface.genericParameters(),
+                        named.arguments(),
+                        "module contract " + iface.name()));
+        return new ModuleType(contractRef.name(), expected);
+    }
+
+    public static ModuleType moduleContractType(
+            Ast.Program program,
+            Ast.TypeRef contractRef) {
+        return moduleContractType(program, Map.of(), contractRef);
+    }
+
+    /**
+     * Proves that one real exported module satisfies a host-required
+     * Module<Contract> type and returns the precise actual module type.
+     *
+     * This is deliberately stronger than Types.isAssignable alone because the
+     * checker retains class/interface inheritance and structural rules needed
+     * by member types inside the module shape.
+     */
+    public static ModuleType requireExportedModuleAssignable(
+            Ast.Program program,
+            Map<String, Ast.InterfaceDecl> importedInterfaces,
+            String moduleName,
+            ModuleType requiredType) {
+        if (requiredType == null) throw new IllegalArgumentException("required module type cannot be null");
+        program = AnnotationExpander.expand(program);
+        TypeChecker checker = new TypeChecker();
+        checker.validateImports(program);
+        checker.collectImportedInterfaces(importedInterfaces);
+        checker.collect(program);
+
+        Ast.ModuleDecl module = checker.modules.get(moduleName);
+        if (module == null || module.name().equals(Parser.ROOT_MODULE)) {
+            throw new IllegalArgumentException("unknown exported module '" + moduleName + "'");
+        }
+
+        ModuleType actual = checker.moduleType(module);
+        if (!checker.assignable(actual, requiredType)) {
+            throw new IllegalArgumentException(
+                    "loaded module '" + moduleName + "' does not satisfy required "
+                            + requiredType.name() + ": expected " + requiredType.shape()
+                            + " but got " + actual.shape());
+        }
+        return actual;
+    }
+
+    public static ModuleType requireExportedModuleAssignable(
+            Ast.Program program,
+            String moduleName,
+            ModuleType requiredType) {
+        return requireExportedModuleAssignable(program, Map.of(), moduleName, requiredType);
+    }
+
     private void collectImportedInterfaces(Map<String, Ast.InterfaceDecl> imported) {
         if (imported == null) throw new IllegalArgumentException("imported contract map cannot be null");
         for (Map.Entry<String, Ast.InterfaceDecl> entry : imported.entrySet()) {

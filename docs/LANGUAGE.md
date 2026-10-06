@@ -166,8 +166,14 @@ validated structurally when it is used where a `Module<T>` is required even
 if it did not repeat the contract in its declaration.
 
 `Module<T>` does not grant ambient filesystem loading. Cross-file module
-resolution remains host/linker controlled; a future dynamic loader must return
-a validated `Module<T>` only from an explicitly authorized source.
+resolution remains host/linker controlled. Trusted hosts that already possess
+`HOT_CODE_LOAD` may use `HotReloadManager.loadModule(..., requiredType)` to
+stage plugin/source code only after a real named module has been structurally
+proved assignable to the supplied `Module<T>` type. Contract failure happens
+before a generation is staged. The required type can be constructed from
+compiler metadata with `TypeChecker.moduleContractType(...)`. This is a host
+capability boundary, not a guest filesystem/reflection primitive; any future
+guest-facing dynamic loader must preserve the same rule.
 
 ## Functions and returns
 

@@ -5,6 +5,7 @@ import dev.oreslang.parser.Parser;
 import dev.oreslang.runtime.ExecutionProfile;
 import dev.oreslang.runtime.IsolatePolicy;
 import dev.oreslang.runtime.LinkedProgramRunner;
+import dev.oreslang.runtime.HotReloadManager;
 import dev.oreslang.types.TypeChecker;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Source;
@@ -270,6 +271,82 @@ final class ModuleContractsTest {
                   pub const String value = "constant";
                 end
                 """)));
+    }
+
+    @Test
+    void hotLoaderCanRequireAnExternalModuleContractBeforeStaging() {
+        var contractProgram = TypeChecker.check(Parser.parse("""
+                pub define trait PluginModule as
+                  const kind: String;
+                  fnc health(): int;
+                end
+                """));
+        var required = TypeChecker.moduleContractType(
+                contractProgram,
+                dev.oreslang.ast.Ast.TypeRef.simple("PluginModule"));
+
+        try (HotReloadManager hot = new HotReloadManager(
+                IsolatePolicy.developer(),
+                ExecutionProfile.serverJit())) {
+            var good = hot.loadModule(
+                    "good-plugin.ores",
+                    """
+                    define module GoodPlugin as
+                      pub const String kind = "good";
+                      pub fnc health(): int { return 1; }
+                    end
+                    """,
+                    "GoodPlugin",
+                    required);
+
+            assertFalse(good.started());
+            assertEquals(1, hot.liveGenerations());
+
+            IllegalArgumentException bad = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> hot.loadModule(
+                            "bad-plugin.ores",
+                            """
+                            define module BadPlugin as
+                              pub val String kind = "bad";
+                            end
+                            """,
+                            "BadPlugin",
+                            required));
+            assertTrue(bad.getMessage().contains("does not satisfy required"));
+            assertEquals(
+                    1,
+                    hot.liveGenerations(),
+                    "failed contract validation must happen before staging a generation");
+        }
+    }
+
+    @Test
+    void hotLoaderRequiresAnActualNamedModuleNotARecordLikeShape() {
+        var contractProgram = TypeChecker.check(Parser.parse("""
+                pub define trait PluginModule as
+                  kind: String;
+                end
+                """));
+        var required = TypeChecker.moduleContractType(
+                contractProgram,
+                dev.oreslang.ast.Ast.TypeRef.simple("PluginModule"));
+
+        try (HotReloadManager hot = new HotReloadManager(
+                IsolatePolicy.developer(),
+                ExecutionProfile.serverJit())) {
+            IllegalArgumentException missingModule = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> hot.loadModule(
+                            "record-only.ores",
+                            """
+                            pub const record_like = obj{kind: "not-a-module"};
+                            """,
+                            "record_like",
+                            required));
+            assertTrue(missingModule.getMessage().contains("unknown exported module"));
+            assertEquals(0, hot.liveGenerations());
+        }
     }
 
     @Test

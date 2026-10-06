@@ -3,6 +3,8 @@ package dev.oreslang.runtime;
 import dev.oreslang.OresLanguage;
 import dev.oreslang.compiler.OresCompiler;
 import dev.oreslang.compiler.IncrementalCompiler;
+import dev.oreslang.types.TypeChecker;
+import dev.oreslang.types.Types.ModuleType;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
@@ -46,6 +48,27 @@ public final class HotReloadManager implements AutoCloseable {
      */
     public synchronized Generation load(String name, String sourceText) {
         OresCompiler.validateForIsolate(sourceText, policy);
+        return stage(name, digest(sourceText), sourceText);
+    }
+
+    /**
+     * Validates one real exported module against a host-required Module<T>
+     * contract before allocating/staging a generation.
+     *
+     * The source text itself gains no ambient loading authority: the trusted
+     * host supplies both the source and the required contract type, and this
+     * manager still requires HOT_CODE_LOAD at construction.
+     */
+    public synchronized Generation loadModule(
+            String name,
+            String sourceText,
+            String moduleName,
+            ModuleType requiredType) {
+        var program = OresCompiler.validateForIsolate(sourceText, policy);
+        TypeChecker.requireExportedModuleAssignable(
+                program,
+                moduleName,
+                requiredType);
         return stage(name, digest(sourceText), sourceText);
     }
 

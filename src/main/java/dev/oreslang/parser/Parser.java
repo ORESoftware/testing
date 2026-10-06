@@ -165,8 +165,8 @@ public final class Parser {
         Modifiers modifiers = parseModifiers();
 
         if (match(DEFINE)) {
-            if (modifiers.shared) {
-                throw error(previous(), "'shared' must modify an actor declaration; use 'shared actor <Name>'");
+            if (modifiers.shared || modifiers.untrusted) {
+                throw error(previous(), "'shared'/'untrusted' must modify an actor declaration");
             }
             boolean afterDefineAbstract = match(ABSTRACT);
             if (match(CLASS)) {
@@ -192,10 +192,17 @@ public final class Parser {
         if (match(ACTOR, ISOACTOR)) {
             Token actorToken = previous();
             boolean isolated = actorToken.type() == ISOACTOR;
-            if (isolated && modifiers.shared) {
-                throw error(actorToken, "'shared isoactor' is contradictory; use either actor/shared actor or isoactor");
+            if (isolated && (modifiers.shared || modifiers.untrusted)) {
+                throw error(
+                        actorToken,
+                        "'shared/untrusted isoactor' is contradictory; use either shared actor, untrusted actor, or isoactor");
             }
-            Ast.ActorKind actorKind = isolated ? Ast.ActorKind.PRIVATE : Ast.ActorKind.SHARED;
+            if (modifiers.shared && modifiers.untrusted) {
+                throw error(actorToken, "an actor cannot be both shared and untrusted");
+            }
+            Ast.ActorKind actorKind = modifiers.untrusted
+                    ? Ast.ActorKind.UNTRUSTED
+                    : isolated ? Ast.ActorKind.PRIVATE : Ast.ActorKind.SHARED;
             if (isLegacyFnSpelling()) {
                 throw error(peek(), "actor functions are declared with 'actor fnc', not 'actor fn'");
             }
@@ -206,7 +213,7 @@ public final class Parser {
             }
             return parseActorClass(actorKind);
         }
-        if (modifiers.shared) throw error(previous(), "'shared' must modify an actor declaration");
+        if (modifiers.shared || modifiers.untrusted) throw error(previous(), "'shared'/'untrusted' must modify an actor declaration");
         if (match(FNC)) return parseFunction(annotations, modifiers, Ast.CallableKind.FNC);
         if (match(ROUTINE)) return parseFunction(annotations, modifiers, Ast.CallableKind.ROUTINE);
         if (modifiers.nonLexical) throw error(peek(), "'nlex' applies only to fnc, routine, or lambda");
@@ -507,12 +514,14 @@ public final class Parser {
         boolean isStatic = false;
         boolean isAbstract = false;
         boolean shared = false;
+        boolean untrusted = false;
         boolean visibilitySeen = false;
         boolean asyncSeen = false;
         boolean nonLexicalSeen = false;
         boolean staticSeen = false;
         boolean abstractSeen = false;
         boolean sharedSeen = false;
+        boolean untrustedSeen = false;
 
         while (true) {
             if (match(PUB)) {
@@ -543,11 +552,15 @@ public final class Parser {
                 if (sharedSeen) throw error(previous(), "duplicate 'shared' modifier");
                 sharedSeen = true;
                 shared = true;
+            } else if (match(UNTRUSTED)) {
+                if (untrustedSeen) throw error(previous(), "duplicate 'untrusted' modifier");
+                untrustedSeen = true;
+                untrusted = true;
             } else {
                 break;
             }
         }
-        return new Modifiers(visibility, async, nonLexical, isStatic, isAbstract, shared);
+        return new Modifiers(visibility, async, nonLexical, isStatic, isAbstract, shared, untrusted);
     }
 
     private Ast.TypeRef parseReturnType(List<Ast.Annotation> annotations) {
@@ -1600,10 +1613,28 @@ public final class Parser {
         if (match(AWAIT)) return new Ast.AwaitExpr(parseUnary());
 
         if (match(NB)) {
+            if (match(CB)) {
+                if (!match(WRITECH)) {
+                    throw error(previous(), "'nb cb' must prefix writech");
+                }
+                Ast.ChannelOpExpr operation =
+                        (Ast.ChannelOpExpr) parseChannelOperation(
+                                Ast.ChannelOperation.WRITE,
+                                Ast.WaitMode.NONBLOCKING);
+                consume(PIPE, "channel callback requires '|| -> { ... }'");
+                consume(PIPE, "channel callback requires '|| -> { ... }'");
+                consume(ARROW, "channel callback requires '|| -> { ... }'");
+                return new Ast.ChannelOpExpr(
+                        operation.operation(),
+                        operation.mode(),
+                        operation.channel(),
+                        operation.value(),
+                        parseBlock());
+            }
             if (match(READCH)) return parseChannelOperation(Ast.ChannelOperation.READ, Ast.WaitMode.NONBLOCKING);
             if (match(WRITECH)) return parseChannelOperation(Ast.ChannelOperation.WRITE, Ast.WaitMode.NONBLOCKING);
             if (match(SELECT)) return parseDynamicSelect(Ast.WaitMode.NONBLOCKING);
-            throw error(previous(), "'nb' must prefix readch, writech, or select");
+            throw error(previous(), "'nb' must prefix readch, writech, select, or cb writech");
         }
 
         if (check(TRY) && current + 1 < tokens.size()) {
@@ -2044,5 +2075,12 @@ public final class Parser {
         return new IllegalArgumentException("Oreslang parse error at " + token.line() + ":" + token.column() + ": " + message);
     }
 
-    private record Modifiers(Ast.Visibility visibility, boolean async, boolean nonLexical, boolean isStatic, boolean isAbstract, boolean shared) { }
+    private record Modifiers(
+            Ast.Visibility visibility,
+            boolean async,
+            boolean nonLexical,
+            boolean isStatic,
+            boolean isAbstract,
+            boolean shared,
+            boolean untrusted) { }
 }

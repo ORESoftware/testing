@@ -63,6 +63,10 @@ public record IsolatePolicy(
         if (maxHeapBytes < 16L * 1024 * 1024) throw new IllegalArgumentException("maxHeapBytes must be at least 16 MiB");
         if (maxMailboxMessages <= 0) throw new IllegalArgumentException("maxMailboxMessages must be positive");
         if (maxWallTime.isNegative() || maxWallTime.isZero()) throw new IllegalArgumentException("maxWallTime must be positive");
+        if (capabilities.contains(Capability.JAVA_SOURCE_INTEROP)
+                && !capabilities.contains(Capability.JAVA_INTEROP)) {
+            throw new IllegalArgumentException("JAVA_SOURCE_INTEROP requires JAVA_INTEROP");
+        }
         if (adversarial && capabilities.contains(Capability.THREAD_CREATE)) {
             throw new IllegalArgumentException("adversarial isolates cannot grant THREAD_CREATE");
         }
@@ -147,6 +151,18 @@ public record IsolatePolicy(
     public Context.Builder restrictedContextBuilder(
             ExecutionProfile profile,
             Set<String> allowedHostClasses) {
+        return restrictedContextBuilder(
+                profile,
+                allowedHostClasses,
+                RuntimePermissions.fromCapabilities(capabilities),
+                PermissionCheckMode.COMPILE);
+    }
+
+    public Context.Builder restrictedContextBuilder(
+            ExecutionProfile profile,
+            Set<String> allowedHostClasses,
+            RuntimePermissions permissions,
+            PermissionCheckMode permissionCheckMode) {
         Set<String> hostClasses = Set.copyOf(allowedHostClasses);
         if (!hostClasses.isEmpty()) {
             require(Capability.JAVA_INTEROP, "Java host imports");
@@ -177,7 +193,7 @@ public record IsolatePolicy(
                 .in(new ByteArrayInputStream(new byte[0]))
                 .out(new ByteArrayOutputStream())
                 .err(new ByteArrayOutputStream())
-                .arguments(OresLanguage.ID, applicationArguments(profile));
+                .arguments(OresLanguage.ID, applicationArguments(profile, permissions, permissionCheckMode));
 
         /*
          * Graal's engine.IsolateLibrary option is experimental in 25.x. Opt in
@@ -234,17 +250,23 @@ public record IsolatePolicy(
             throw new SecurityException("Java host class is blocked from class-level interop: " + className);
         }
 
-        if (className.startsWith("java.io.") || className.startsWith("java.nio.file.")) {
-            require(Capability.FILESYSTEM_READ, "Java host class " + className);
-            require(Capability.FILESYSTEM_WRITE, "Java host class " + className);
-        }
-        if (className.startsWith("java.net.")) {
-            require(Capability.NETWORK, "Java host class " + className);
-        }
-        if (className.startsWith("java.nio.channels.")) {
-            require(Capability.NETWORK, "Java host class " + className);
-            require(Capability.FILESYSTEM_READ, "Java host class " + className);
-            require(Capability.FILESYSTEM_WRITE, "Java host class " + className);
+        /*
+         * Scoped Ores permissions are enforced only at Ores-owned native I/O
+         * boundaries. Handing guest code a raw JDK filesystem/socket/channel
+         * class would hand it an authority that cannot be narrowed to a path,
+         * host, port, or explicit deny rule. Keep those packages behind the
+         * Ores fs/network/http APIs instead.
+         *
+         * Trusted mixed Java source remains a deliberately stronger,
+         * separately gated escape hatch under JAVA_SOURCE_INTEROP.
+         */
+        if (className.startsWith("java.io.")
+                || className.startsWith("java.nio.file.")
+                || className.startsWith("java.net.")
+                || className.startsWith("java.nio.channels.")) {
+            throw new SecurityException(
+                    "direct Java host I/O is blocked from class-level interop; "
+                            + "use Oreslang fs/network/http APIs: " + className);
         }
         if (className.startsWith("java.util.concurrent.")) {
             require(Capability.THREAD_CREATE, "Java host class " + className);
@@ -297,16 +319,28 @@ public record IsolatePolicy(
     }
 
     public String[] applicationArguments(ExecutionProfile profile) {
+        return applicationArguments(
+                profile,
+                RuntimePermissions.fromCapabilities(capabilities),
+                PermissionCheckMode.COMPILE);
+    }
+
+    public String[] applicationArguments(
+            ExecutionProfile profile,
+            RuntimePermissions permissions,
+            PermissionCheckMode permissionCheckMode) {
         String caps = capabilities.stream().map(Enum::name).sorted().collect(Collectors.joining(","));
-        return new String[] {
+        java.util.ArrayList<String> args = new java.util.ArrayList<>(java.util.List.of(
                 "--ores-capabilities=" + caps,
                 "--ores-max-heap-bytes=" + maxHeapBytes,
                 "--ores-max-mailbox-messages=" + maxMailboxMessages,
                 "--ores-max-wall-ms=" + maxWallTime.toMillis(),
                 "--ores-adversarial=" + adversarial,
                 "--ores-execution-mode=" + profile.mode().name(),
-                "--ores-platform=" + profile.platform().name()
-        };
+                "--ores-platform=" + profile.platform().name(),
+                "--ores-permission-check=" + permissionCheckMode.name().toLowerCase(Locale.ROOT)));
+        args.addAll(java.util.List.of(permissions.applicationArguments()));
+        return args.toArray(String[]::new);
     }
 
     public static IsolatePolicy fromApplicationArguments(String[] args) {

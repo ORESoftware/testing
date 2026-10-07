@@ -278,8 +278,12 @@ final class ChannelSelectSyntaxTest {
 
         Ast.FunctionDecl fn =
                 (Ast.FunctionDecl) program.modules().getFirst().declarations().getFirst();
+        Ast.BindingStmt channel =
+                assertInstanceOf(Ast.BindingStmt.class, fn.body().getFirst());
+        assertEquals("output", channel.name());
+
         Ast.ExprStmt statement =
-                assertInstanceOf(Ast.ExprStmt.class, fn.body().getFirst());
+                assertInstanceOf(Ast.ExprStmt.class, fn.body().get(1));
         Ast.ChannelOpExpr write =
                 assertInstanceOf(Ast.ChannelOpExpr.class, statement.expression());
         assertEquals(Ast.WaitMode.NONBLOCKING, write.mode());

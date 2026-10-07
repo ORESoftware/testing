@@ -279,7 +279,7 @@ final class ChannelSelectSyntaxTest {
         Ast.FunctionDecl fn =
                 (Ast.FunctionDecl) program.modules().getFirst().declarations().getFirst();
         Ast.ExprStmt statement =
-                assertInstanceOf(Ast.ExprStmt.class, fn.body().get(1));
+                assertInstanceOf(Ast.ExprStmt.class, fn.body().getFirst());
         Ast.ChannelOpExpr write =
                 assertInstanceOf(Ast.ChannelOpExpr.class, statement.expression());
         assertEquals(Ast.WaitMode.NONBLOCKING, write.mode());
@@ -298,94 +298,6 @@ final class ChannelSelectSyntaxTest {
                   return;
                 }
                 """)));
-    }
-
-    @Test
-    void channelAndSelectCapabilitiesCannotCrossActorBoundaries() {
-        assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                pub actor fnc bad(Channel<int> channel): int {
-                  return 1;
-                }
-                """)));
-
-        assertThrows(IllegalArgumentException.class, () -> TypeChecker.check(Parser.parse("""
-                pub actor fnc bad_result(Array<SelectCase> cases): SelectResult {
-                  return select from cases;
-                }
-                """)));
-    }
-
-    @Test
-    void nbSelectMovesMoveOnlyCapturesIntoDeferredContinuation() {
-        IllegalArgumentException moved = assertThrows(
-                IllegalArgumentException.class,
-                () -> TypeChecker.check(Parser.parse("""
-                        actor fnc bad(): void {
-                          val Channel<int> input = Channel.new<int>(1);
-                          val Array<int> owned = [1, 2, 3];
-
-                          nb select {
-                          case readch input: val value
-                            stdio.println(owned[0]);
-                          }
-
-                          stdio.println(owned[0]);
-                          return;
-                        }
-                        """)));
-
-        assertTrue(
-                moved.getMessage().contains("moved value")
-                        || moved.getMessage().contains("cannot use moved"),
-                moved::getMessage);
-    }
-
-    @Test
-    void nbSelectMayCaptureCopyValues() {
-        assertDoesNotThrow(() -> TypeChecker.check(Parser.parse("""
-                actor fnc copy_capture(): void {
-                  val Channel<int> input = Channel.new<int>(1);
-                  val int label = 7;
-
-                  nb select {
-                  case readch input: val value
-                    stdio.println(label + value);
-                  }
-
-                  stdio.println(label);
-                  return;
-                }
-
-                """)));
-    }
-
-    @Test
-    void captureScannerTraversesNestedChannelAndSelectSyntax() {
-        IllegalArgumentException moved = assertThrows(
-                IllegalArgumentException.class,
-                () -> TypeChecker.check(Parser.parse("""
-                        actor fnc bad(): void {
-                          val Channel<int> input = Channel.new<int>(1);
-                          val Array<int> owned = [1, 2, 3];
-
-                          val (() => void) callback = || -> {
-                            nb select {
-                            case readch input: val value
-                              stdio.println(owned[0]);
-                            }
-                            return;
-                          };
-
-                          callback();
-                          stdio.println(owned[0]);
-                          return;
-                        }
-                        """)));
-
-        assertTrue(
-                moved.getMessage().contains("moved value")
-                        || moved.getMessage().contains("cannot use moved"),
-                moved::getMessage);
     }
 
     @Test

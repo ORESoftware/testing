@@ -132,4 +132,96 @@ final class ConcurrencyContractProofTest {
             assertTrue(actor.failure().isEmpty());
         }
     }
+    @Test
+    void pendingActorBlockingWaitUsesVirtualImplementationThread()
+            throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            ChannelRuntime.Channel<Integer> gate =
+                    new ChannelRuntime.Channel<>(0);
+            CountDownLatch blocked = new CountDownLatch(1);
+            CountDownLatch siblingRan = new CountDownLatch(1);
+            AtomicReference<Boolean> virtual = new AtomicReference<>();
+            AtomicReference<Boolean> blockingImpl =
+                    new AtomicReference<>();
+
+            ActorRuntime.ActorRef<String> waiter =
+                    runtime.spawnShared(() -> (message, context) -> {
+                        if (!"block".equals(message)) return;
+                        virtual.set(Thread.currentThread().isVirtual());
+                        blockingImpl.set(
+                                ActorRuntime.isActorBlockingImplementationThread());
+                        blocked.countDown();
+                        assertEquals(
+                                9,
+                                gate.readAsync().join(),
+                                "the actor may park only on its virtual implementation turn");
+                        context.self().stop();
+                    });
+
+            ActorRuntime.ActorRef<String> sibling =
+                    runtime.spawnShared(() -> (message, context) -> {
+                        if (!"ping".equals(message)) return;
+                        siblingRan.countDown();
+                        context.self().stop();
+                    });
+
+            waiter.send("block");
+            assertTrue(blocked.await(2, TimeUnit.SECONDS));
+            sibling.send("ping");
+
+            assertTrue(
+                    siblingRan.await(2, TimeUnit.SECONDS),
+                    "a blocked actor must not consume the bounded shared dispatcher carrier");
+            assertEquals(Boolean.TRUE, virtual.get());
+            assertEquals(Boolean.TRUE, blockingImpl.get());
+
+            assertTrue(
+                    gate.tryWrite(9),
+                    "rendezvous write should release the parked actor");
+            assertTrue(waiter.awaitTermination(2, TimeUnit.SECONDS));
+            assertTrue(sibling.awaitTermination(2, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void pendingActorAwaitUsesSameVirtualImplementationBoundary()
+            throws Exception {
+        try (ActorRuntime runtime = new ActorRuntime()) {
+            java.util.concurrent.CompletableFuture<Integer> gate =
+                    new java.util.concurrent.CompletableFuture<>();
+            CountDownLatch blocked = new CountDownLatch(1);
+            CountDownLatch siblingRan = new CountDownLatch(1);
+            AtomicReference<Boolean> blockingImpl =
+                    new AtomicReference<>();
+
+            ActorRuntime.ActorRef<String> waiter =
+                    runtime.spawnShared(() -> (message, context) -> {
+                        if (!"block".equals(message)) return;
+                        blockingImpl.set(
+                                ActorRuntime.isActorBlockingImplementationThread());
+                        blocked.countDown();
+                        assertEquals(13, AsyncRuntime.await(gate));
+                        context.self().stop();
+                    });
+
+            ActorRuntime.ActorRef<String> sibling =
+                    runtime.spawnShared(() -> (message, context) -> {
+                        if (!"ping".equals(message)) return;
+                        siblingRan.countDown();
+                        context.self().stop();
+                    });
+
+            waiter.send("block");
+            assertTrue(blocked.await(2, TimeUnit.SECONDS));
+            sibling.send("ping");
+            assertTrue(siblingRan.await(2, TimeUnit.SECONDS));
+            assertEquals(Boolean.TRUE, blockingImpl.get());
+
+            gate.complete(13);
+            assertTrue(waiter.awaitTermination(2, TimeUnit.SECONDS));
+            assertTrue(sibling.awaitTermination(2, TimeUnit.SECONDS));
+        }
+    }
+
+
 }

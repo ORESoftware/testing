@@ -2,9 +2,8 @@ package dev.oreslang.runtime;
 
 import java.util.Objects;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -13,15 +12,14 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Context-owned scheduler for ordinary Oreslang async callables.
  *
  * <p>The language contract is deliberately task/future based rather than
- * thread based: callers receive an Oreslang-owned {@link OresFuture}; the backing carrier
- * is an implementation detail. The compatibility execution bridge uses virtual threads so
+ * thread based: callers receive a {@link CompletionStage}; the backing carrier
+ * is an implementation detail. The initial interpreter uses virtual threads so
  * an async callable never consumes an actor dispatcher worker while it is
  * blocked in host/runtime code. A future compiler can replace this with
  * continuation/state-machine lowering without changing source semantics.</p>
@@ -48,15 +46,6 @@ public final class AsyncRuntime implements AutoCloseable {
     private final TurnExecutor turnExecutor;
     private final ExecutorService executor;
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final ConcurrentHashMap<OresFuture<?>, TaskExit> taskExits = new ConcurrentHashMap<>();
-
-    private static final class TaskExit {
-        // 0: not entered, 1: running, 2: guest turn exited/cancelled before entry.
-        private final AtomicInteger state = new AtomicInteger();
-        private final CountDownLatch exited = new CountDownLatch(1);
-        private volatile Thread thread;
-        private volatile OresFuture<?> completion;
-    }
 
     public AsyncRuntime() {
         this(TurnExecutor.direct());
@@ -85,74 +74,25 @@ public final class AsyncRuntime implements AutoCloseable {
      * future. Cancellation is propagated to the backing task and therefore
      * interrupts the current virtual carrier when possible.
      */
-    public <T> OresFuture<T> submit(Task<T> task) {
+    public <T> CompletableFuture<T> submit(Task<T> task) {
         Objects.requireNonNull(task, "task");
         if (closed.get()) throw new RejectedExecutionException("async runtime is closed");
 
-        AtomicReference<Future<?>> backing = new AtomicReference<>();
-        TaskExit exit = new TaskExit();
-        OresFuture<T> completion = new OresFuture<>(() -> {
-            Future<?> carrier = backing.getAndSet(null);
-            if (carrier != null) carrier.cancel(true);
-            if (exit.state.compareAndSet(0, 2)) {
-                taskExits.remove(exit.completion, exit);
-                exit.exited.countDown();
-            }
-        });
-        exit.completion = completion;
-        taskExits.put(completion, exit);
+        TaskFuture<T> completion = new TaskFuture<>();
         final Future<?> scheduled;
         try {
-            scheduled = executor.submit(() -> {
-                if (!exit.state.compareAndSet(0, 1)) {
-                    taskExits.remove(completion, exit);
-                    return;
-                }
-                exit.thread = Thread.currentThread();
-                try { runTask(task, completion); }
-                finally {
-                    // TurnExecutor has returned, including its context leave.
-                    exit.state.set(2);
-                    taskExits.remove(completion, exit);
-                    exit.exited.countDown();
-                }
-            });
+            scheduled = executor.submit(() -> runTask(task, completion));
         } catch (RejectedExecutionException rejected) {
-            taskExits.remove(completion, exit);
-            exit.state.set(2);
-            exit.exited.countDown();
             throw new RejectedExecutionException("async runtime is closed", rejected);
         }
-        backing.set(scheduled);
-        if (completion.isCancelled()) {
-            scheduled.cancel(true);
-            if (exit.state.compareAndSet(0, 2)) exit.exited.countDown();
-            if (exit.state.get() == 2) taskExits.remove(completion, exit);
-        }
-        completion.whenCompleteRuntime((value, failure) -> {
-            // Cancellation delivers waiters before invoking the cancellation hook.
-            // Leave the carrier attached until that hook has interrupted it.
-            if (!completion.isCancelled()) backing.set(null);
-        });
+        completion.attach(scheduled);
 
         // Close may race submission after the initial check.
         if (closed.get()) completion.cancel(true);
         return completion;
     }
 
-    /** Cancellation settles a Future before its carrier leaves the guest turn. */
-    void awaitTaskExit(OresFuture<?> task) {
-        TaskExit exit = taskExits.get(task);
-        if (exit == null || exit.thread == Thread.currentThread()) return;
-        boolean interrupted = false;
-        for (;;) {
-            try { exit.exited.await(); break; }
-            catch (InterruptedException ignored) { interrupted = true; }
-        }
-        if (interrupted) Thread.currentThread().interrupt();
-    }
-
-    private <T> void runTask(Task<T> task, OresFuture<T> completion) {
+    private <T> void runTask(Task<T> task, TaskFuture<T> completion) {
         if (completion.isCancelled()) return;
 
         AtomicReference<T> value = new AtomicReference<>();
@@ -175,8 +115,8 @@ public final class AsyncRuntime implements AutoCloseable {
 
         if (completion.isCancelled()) return;
         Throwable thrown = failure.get();
-        if (thrown == null) completion.completeFromRuntime(value.get());
-        else completion.failFromRuntime(thrown);
+        if (thrown == null) completion.complete(value.get());
+        else completion.completeExceptionally(thrown);
     }
 
     /**
@@ -187,24 +127,18 @@ public final class AsyncRuntime implements AutoCloseable {
      * <p>An actor carrier is never allowed to park here. Actor await must be
      * lowered to mailbox-turn suspension/resumption.</p>
      */
-    public static <T> T await(OresFuture<T> future) {
-        Objects.requireNonNull(future, "future");
-        if (ActorRuntime.inActorExecution() && !future.isDone()) {
-            throw new IllegalStateException(
-                    "await would block an actor dispatcher carrier; actor continuation lowering must suspend/resume the mailbox turn");
-        }
-        return blockingGet(future);
-    }
-
-    /**
-     * Host-interop bridge only. CompletionStage is normalized immediately into
-     * OresFuture so host callback scheduling never becomes Oreslang semantics.
-     */
     public static <T> T await(CompletionStage<T> stage) {
-        return await(OresFuture.from(Objects.requireNonNull(stage, "stage")));
-    }
+        Objects.requireNonNull(stage, "stage");
+        CompletableFuture<T> future = stage.toCompletableFuture();
+        if (ActorRuntime.inActorExecution()
+                && !ActorRuntime.isActorBlockingImplementationThread()
+                && !future.isDone()) {
+            throw new IllegalStateException(
+                    "await would block a bounded actor dispatcher carrier; "
+                            + "source-level suspension must run on the actor's "
+                            + "virtual implementation turn");
+        }
 
-    private static <T> T blockingGet(Future<T> future) {
         try {
             return future.get();
         } catch (InterruptedException interrupted) {
@@ -241,4 +175,25 @@ public final class AsyncRuntime implements AutoCloseable {
         }
     }
 
+    private static final class TaskFuture<T> extends CompletableFuture<T> {
+        private final AtomicReference<Future<?>> task = new AtomicReference<>();
+
+        private void attach(Future<?> scheduled) {
+            if (!task.compareAndSet(null, scheduled)) {
+                scheduled.cancel(true);
+                throw new IllegalStateException("async task carrier already attached");
+            }
+            if (isCancelled()) scheduled.cancel(true);
+        }
+
+        @Override
+        public boolean cancel(boolean mayInterruptIfRunning) {
+            boolean cancelled = super.cancel(mayInterruptIfRunning);
+            Future<?> scheduled = task.get();
+            if (cancelled && scheduled != null) {
+                scheduled.cancel(mayInterruptIfRunning);
+            }
+            return cancelled;
+        }
+    }
 }
